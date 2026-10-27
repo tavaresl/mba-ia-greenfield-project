@@ -1,3 +1,4 @@
+import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigType } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -13,6 +14,7 @@ import storageConfig from './config/storage.config';
 import videosConfig from './config/videos.config';
 import swaggerConfig from './config/swagger.config';
 import { envValidationSchema } from './config/env.validation';
+import { VideosModule } from './videos/videos.module';
 
 @Module({
   imports: [
@@ -45,7 +47,15 @@ import { envValidationSchema } from './config/env.validation';
         synchronize: false,
       }),
     }),
+    BullModule.forRootAsync({
+      inject: [queueConfig.KEY],
+      useFactory: (queue: ConfigType<typeof queueConfig>) => ({
+        connection: { host: queue.host, port: queue.port },
+        prefix: queue.prefix,
+      }),
+    }),
     AuthModule,
+    VideosModule,
   ],
   controllers: [AppController],
   providers: [AppService],

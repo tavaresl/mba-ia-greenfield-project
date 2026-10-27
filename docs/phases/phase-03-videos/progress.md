@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 3/12 completed
+**SIs:** 4/12 completed
 
 ### SI-03.1 — Infra: Storage and Queue Services, Dependencies, and Configuration Namespaces
 - **Status:** completed
@@ -33,9 +33,14 @@
   - Pre-existing lint error `no-unsafe-function-type` in `src/test/create-test-data-source.ts` left untouched (baseline debt).
 
 ### SI-03.4 — Processing Queue Registration, Producer, and VideosModule
-- **Status:** pending
-- **Tests:** pending
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 4 passing in the SI's files (3 producer integration against real Redis + 1 module compilation); regression 172 unit/integration + 52 e2e passing (2 consecutive full runs); `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors)
+- **Observations:**
+  - **Undocumented dependency:** `bullmq@6` no longer bundles `ioredis` (optional peer, `>=5`); without it, queue creation fails with "BullMQ could not load the optional 'ioredis' package". Installed `ioredis@^5.11.1` (the registry `latest` is 6.0.0, which neither the plan nor `@nestjs/bullmq@11` was validated against). `library-refs.md` does not mention this; the worker (SI-03.8/03.10) reuses the same install.
+  - The `BullModule.forRootAsync` options currently live inline in `AppModule` and are repeated in the two specs; SI-03.8 extracts them into a shared `bull.options.ts` per the plan.
+  - Producer applies the job options explicitly on each `add` (`PROCESS_VIDEO_JOB_OPTIONS` + `jobId = videoId`) instead of `defaultJobOptions` on the queue, so the contract is visible at the call site and asserted by the integration spec.
+  - `removeOnComplete: true` means de-duplication by `jobId` only holds while the job exists; a re-enqueue after completion creates a new job (the processor must stay idempotent, as planned in TD-10).
+  - Test isolation: `QUEUE_PREFIX=test` is applied by `setup-test-env.ts`; the spec obliterates its queue before each test. A `test:video-processing:meta` key remains in Redis after e2e runs (harmless).
 
 ### SI-03.5 — Endpoint POST /videos (Draft Pre-registration and Upload Initiation)
 - **Status:** pending
