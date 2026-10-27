@@ -144,7 +144,7 @@ Deliver video upload and processing in `nestjs-project`: S3-compatible object st
 ### SI-03.5 — Endpoint POST /videos (Draft Pre-registration and Upload Initiation)
 
 **Route:** POST /videos
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-create.plan.md`
 **Authorization:** Authenticated — video is created in the caller's channel (per `### Authorization Matrix`)
 
 **Description:** Pre-register the video as `draft` when the upload starts and open the S3 multipart upload, returning the part plan the client uses to send the file directly to storage.
@@ -181,7 +181,7 @@ Deliver video upload and processing in `nestjs-project`: S3-compatible object st
 ### SI-03.6 — Endpoints for Part Signing, Resume Listing, and Upload Cancellation
 
 **Route:** POST /videos/:publicId/upload/parts, GET /videos/:publicId/upload/parts, DELETE /videos/:publicId/upload
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-upload-parts.plan.md`
 **Authorization:** Owner only — non-owner and unknown ids both return `404 VIDEO_NOT_FOUND` (per `### Authorization Matrix`)
 
 **Description:** Let the owner obtain presigned URLs for the upload parts, list the parts already stored to resume after a connection failure, and cancel an open upload — all without any video bytes touching the API.
@@ -216,7 +216,7 @@ Deliver video upload and processing in `nestjs-project`: S3-compatible object st
 ### SI-03.7 — Endpoint POST /videos/:publicId/upload/complete (Completion, Size Check, and Enqueue)
 
 **Route:** POST /videos/:publicId/upload/complete
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-upload-complete.plan.md`
 **Authorization:** Owner only (per `### Authorization Matrix`)
 
 **Description:** Close the multipart upload, enforce the real 10 GiB limit on the assembled object, move the video `draft → processing` and publish the processing job — the hand-off point between upload and background processing.
@@ -342,7 +342,7 @@ Deliver video upload and processing in `nestjs-project`: S3-compatible object st
 ### SI-03.11 — Endpoints for Video Status, Streaming, and Download
 
 **Route:** GET /videos/:publicId, GET /videos/:publicId/stream, GET /videos/:publicId/download
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-read-stream-download.plan.md`
 **Authorization:** Owner only; stream/download only for `ready` videos (per `### Authorization Matrix`)
 
 **Description:** Expose the video's status and metadata for polling, and hand out short-lived presigned URLs so playback (HTTP Range / `206`) and download are served by storage, never by the API.
