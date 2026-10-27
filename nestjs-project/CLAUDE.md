@@ -105,8 +105,8 @@ Parallel execution causes FK violations, deadlocks, and cross-suite contaminatio
 Where each suite runs:
 
 ```bash
-# Unit + integration: in video-worker (the API image has no FFmpeg; the media specs need it)
-docker compose exec video-worker npm test -- --runInBand --forceExit
+# Unit + integration: in nestjs-api or video-worker (both images include FFmpeg, which the media specs need)
+docker compose exec nestjs-api npm test -- --runInBand --forceExit
 
 # E2E: in nestjs-api
 docker compose exec nestjs-api npm run test:e2e
@@ -228,7 +228,7 @@ New keys (all validated in `src/config/env.validation.ts`, documented in `.env.e
 ### Worker and FFmpeg
 
 - `video-worker` runs `npm run start:worker:dev` (Nest watch build into `dist-worker/`, via `tsconfig.worker.json`); `npm run start:worker` runs the compiled `dist/worker`.
-- Only the worker image installs FFmpeg. Specs that need it (`src/media/*.integration-spec.ts`, `src/worker/video.processor.integration-spec.ts`) fail with `spawn ffmpeg ENOENT` in `nestjs-api` — run the unit/integration suite in `video-worker`.
+- Both the worker image and the `nestjs-api` dev image install FFmpeg: the specs that need it (`src/media/*.integration-spec.ts`, `src/worker/video.processor.integration-spec.ts`) run in either container. The API runtime itself never calls FFmpeg.
 - The worker service sets `TSC_WATCHFILE`/`TSC_WATCHDIRECTORY` to make the TypeScript watcher poll, because file-change events from bind mounts do not reach it on this setup.
 
 ### Test isolation caveats
