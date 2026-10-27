@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 4/12 completed
+**SIs:** 5/12 completed
 
 ### SI-03.1 — Infra: Storage and Queue Services, Dependencies, and Configuration Namespaces
 - **Status:** completed
@@ -43,9 +43,15 @@
   - Test isolation: `QUEUE_PREFIX=test` is applied by `setup-test-env.ts`; the spec obliterates its queue before each test. A `test:video-processing:meta` key remains in Redis after e2e runs (harmless).
 
 ### SI-03.5 — Endpoint POST /videos (Draft Pre-registration and Upload Initiation)
-- **Status:** pending
-- **Tests:** pending
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 12 passing in the SI's files (5 `VideosService` unit, 2 `VideosService` integration, 7 e2e from `videos-create.plan.md`); regression 179 unit/integration + 59 e2e passing (2 consecutive full runs of each); `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors)
+- **Observations:**
+  - All six Phase 03 domain exceptions from the Error Catalog were added now (only `VALIDATION_ERROR`-style input errors are used by this SI); later SIs consume the rest.
+  - Added `src/videos/videos.constants.ts` (MIME types, extensions, 10 GiB DTO limit, 100/255 length limits, 5 public-id attempts) and `src/common/database/pg-errors.ts` (`isPgUniqueViolationOnColumn`). `ChannelsService` still has its own private copy of that helper; deduplicating it is a refactor outside this SI (follow-up).
+  - Shared e2e helper `src/test/e2e-auth.ts` (`registerConfirmAndLogin`) mirrors the helper inside `auth.e2e-spec.ts` so the next video e2e specs do not repeat it; `auth.e2e-spec.ts` was left untouched.
+  - The DTO limit (10 GiB) is fixed in the contract; `VIDEO_MAX_UPLOAD_BYTES` can only lower the enforced limit at `complete` (SI-03.7). With the test env (5 MiB parts) the e2e asserts `part_count = ceil(file_size / part_size)` for 10 GiB; the exact 103 at the default 100 MiB part size is asserted in the unit spec, which injects production defaults instead of the test env values.
+  - The Swagger CLI plugin picks up `*.dto.ts`; the new `CreateVideoResponseDto` lives in `dto/create-video-response.dto.ts` for that reason. `src/metadata.ts` / `openapi.json` are regenerated in SI-03.12.
+  - e2e `afterEach` aborts open multipart uploads and removes `videos/` objects so MinIO does not accumulate parts across runs.
 
 ### SI-03.6 — Endpoints for Part Signing, Resume Listing, and Upload Cancellation
 - **Status:** pending

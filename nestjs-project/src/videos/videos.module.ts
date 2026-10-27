@@ -6,6 +6,8 @@ import { StorageModule } from '../storage/storage.module';
 import { Video } from './entities/video.entity';
 import { VIDEO_PROCESSING_QUEUE } from './video-processing.constants';
 import { VideoProcessingProducer } from './video-processing.producer';
+import { VideosController } from './videos.controller';
+import { VideosService } from './videos.service';
 
 @Module({
   imports: [
@@ -14,7 +16,8 @@ import { VideoProcessingProducer } from './video-processing.producer';
     StorageModule,
     BullModule.registerQueue({ name: VIDEO_PROCESSING_QUEUE }),
   ],
-  providers: [VideoProcessingProducer],
-  exports: [VideoProcessingProducer],
+  controllers: [VideosController],
+  providers: [VideoProcessingProducer, VideosService],
+  exports: [VideoProcessingProducer, VideosService],
 })
 export class VideosModule {}
