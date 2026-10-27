@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 9/12 completed
+**SIs:** 10/12 completed
 
 ### SI-03.1 — Infra: Storage and Queue Services, Dependencies, and Configuration Namespaces
 - **Status:** completed
@@ -96,9 +96,16 @@
   - Not exercised here: probing/extracting through a real presigned HTTP URL with a moov-at-end MP4 (needs HTTP Range); that path is covered when the processor runs against MinIO in SI-03.10.
 
 ### SI-03.10 — Video Processor (Metadata, Thumbnail, Ready/Failed Transitions)
-- **Status:** pending
-- **Tests:** pending
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 19 passing in the SI's files (9 `VideoProcessor` unit, 9 integration with the real processor on a real BullMQ worker + DB + MinIO + FFmpeg, 1 `WorkerModule`); full unit/integration regression in `video-worker`: 243 passing, 36 suites (2 consecutive runs); e2e in `nestjs-api`: 70 passing (2 runs); `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors). Final criterion verified live (below)
+- **Observations:**
+  - **Live end-to-end check (final acceptance criterion):** with the API (`start:dev`) and the already-running `video-worker` up, a script on the host registered a user, confirmed via Mailpit, logged in, created a video, `PUT` a 51 KB H.264/AAC MP4 part directly to MinIO through the presigned URL and called `complete` (`202`). Without any further action the worker set the video `ready`: `duration_seconds=3`, `640x360`, `h264/aac`, `container_format=mov,mp4,m4a,3gp,3g2,mj2`, `bitrate=136781`, `file_size=51293`, and stored `videos/{id}/thumbnail.jpg` (9.5 KiB). The MP4 has its moov atom at the end, so this also confirms ffprobe/ffmpeg read from a presigned HTTP URL via Range (the gap noted in SI-03.9).
+  - **Bug found and fixed:** `WorkerModule` registered only `Video` with `forFeature`, but `Video -> Channel -> User` relations need all three in the connection metadata, so the real worker crashed with `Entity metadata for Video#channel was not found` as soon as the processor was added (the running container showed it after hot reload). The integration spec had not caught it because its own DataSource lists every entity; the `WorkerModule` spec did. It now registers `Video`, `Channel`, `User` and asserts the relation resolves. After the fix the container recovered by itself (0 restarts).
+  - Integration spec runs the real `VideoProcessor` on a real BullMQ Worker under `QUEUE_PREFIX=test` (the running worker only consumes the default prefix). It covers: valid MP4 and WebM -> `ready` with metadata and a JPEG thumbnail (content type and `FF D8` verified); `mpeg4` MP4 and a text file -> `failed/UNSUPPORTED_MEDIA` with `attemptsMade = 1`; a persistent transient error (probe stubbed) -> status stays `processing` on attempts 1-3 and ends `failed/PROCESSING_FAILED` with `attemptsMade = 3` (job added with a 50 ms fixed backoff instead of the producer's 5 s exponential one); re-delivery for `ready`/`failed` videos leaves the row (including `updated_at`) untouched.
+  - Failure mapping: `MediaProbeError` and unsupported codec combinations (internal `UnsupportedMediaError`) -> `UNSUPPORTED_MEDIA` + `UnrecoverableError`; everything else (including storage errors and `MediaProcessingError`) is retried and marked `PROCESSING_FAILED` only on the last attempt (`attemptsMade + 1 >= opts.attempts`, 1 when unset). Both transitions are conditional on `status = 'processing'`.
+  - Thumbnail frame at `min(1, duration / 2)` seconds; probe URL is signed with the internal client and expires in twice the media timeout.
+  - Gap carried over from SI-03.7: if the worker is down when a job is added the job simply waits in Redis (fine); but a video left `processing` without any job (process died between the DB update and the enqueue) is still never picked up. Not addressed by the plan.
+  - The live check left one user/video in the dev DB and objects in MinIO; the next test run's cleanup removes them.
 
 ### SI-03.11 — Endpoints for Video Status, Streaming, and Download
 - **Status:** pending

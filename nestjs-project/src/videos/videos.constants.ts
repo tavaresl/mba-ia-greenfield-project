@@ -19,4 +19,11 @@ export const MAX_PARTS_PER_COMPLETION = MAX_MULTIPART_PARTS;
 
 export const VIDEO_FAILURE_REASONS = {
   UPLOAD_SIZE_EXCEEDED: 'UPLOAD_SIZE_EXCEEDED',
+  UNSUPPORTED_MEDIA: 'UNSUPPORTED_MEDIA',
+  PROCESSING_FAILED: 'PROCESSING_FAILED',
 } as const;
+
+export const THUMBNAIL_FILE_NAME = 'thumbnail.jpg';
+export const THUMBNAIL_CONTENT_TYPE = 'image/jpeg';
+export const thumbnailKeyFor = (videoId: string): string =>
+  `videos/${videoId}/${THUMBNAIL_FILE_NAME}`;
