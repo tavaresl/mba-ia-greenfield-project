@@ -1,7 +1,7 @@
 ---
 scope_type: phase
 related_phases: [3]
-status: pending
+status: decided
 date: 2026-10-26
 scope_description: "Phase 03 (backend) — upload and background processing of videos in nestjs-project: how the S3-compatible object storage (MinIO in dev) is used (bucket/key organization, client library, presigned access), the 10GB upload strategy that keeps bytes off the API, the job queue technology, the video worker topology and FFmpeg/ffprobe integration, the streaming (HTTP Range / 206) and download delivery, the unique short video identifier, and the video status lifecycle including processing-failure handling."
 ---
@@ -49,7 +49,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (single private bucket, `videos/{videoId}/…`)** — the minimum layout that serves both asset types, derives keys from the immutable PK, and needs a single bucket bootstrap in Compose.
 
-**Decision:** _[pending]_
+**Decision:** A (single private bucket, `videos/{videoId}/…`)
 
 ---
 
@@ -75,7 +75,8 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (AWS SDK v3)** — the only option that presigns individual multipart parts out of the box and keeps the "MinIO in dev, S3 in prod" switch purely configurational.
 
-**Decision:** _[pending]_
+**Decision:** A (AWS SDK v3)
+**Libraries:** @aws-sdk/client-s3, @aws-sdk/s3-request-presigner
 
 ---
 
@@ -101,7 +102,9 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (S3 multipart with presigned parts)** — the only option where a 10GB upload puts no load on the API, which is the phase's central non-functional requirement; the public/internal endpoint split and CORS are one-time configuration.
 
-**Decision:** _[pending]_
+**Decision:** A (S3 multipart upload with presigned part URLs, client → storage)
+**Revisions:**
+- 2026-10-26 — Pre-registration payload clarified (AMB-2): `POST /videos` requires `title` plus original file name, declared size and MIME type; all are persisted on the draft row. Title stays editable in Phase 04. Rationale: user chose title-required-at-create over deriving it from the file name.
 
 ---
 
@@ -131,7 +134,8 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (BullMQ + Redis)** — the only option with an official Nest 11 module and job-level retry/backoff/concurrency semantics out of the box; the cost is one Redis container, which the C4 diagram already budgets as a separate "Message Queue" container.
 
-**Decision:** _[pending]_
+**Decision:** A (BullMQ + Redis)
+**Libraries:** @nestjs/bullmq, bullmq
 
 ---
 
@@ -165,7 +169,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (separate process, same codebase, own container)** — honors the C4 container boundary and keeps FFmpeg off the API while sharing persistence, config and storage code with full DI.
 
-**Decision:** _[pending]_
+**Decision:** A (separate worker process, same codebase, own Compose service)
 
 ---
 
@@ -194,7 +198,9 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (system FFmpeg + typed spawn wrapper)** — avoids a deprecated dependency and binary-provenance issues; the worker image (TD-05 A) is the natural place to install FFmpeg.
 
-**Decision:** _[pending]_
+**Decision:** A (system FFmpeg + typed `spawn` wrapper)
+**Revisions:**
+- 2026-10-26 — Persisted metadata clarified (AMB-3): typed columns for duration, width, height, video codec, audio codec, container format, bitrate and size (bytes), extracted from ffprobe. Rationale: queryable, testable Data Model over a free-form JSON column.
 
 ---
 
@@ -224,7 +230,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (original + progressive Range streaming)** — fulfils "metadata + thumbnail + streaming" without transcoding cost or extra storage; Option B remains an additive worker step if broader format support becomes a requirement.
 
-**Decision:** _[pending]_
+**Decision:** A (original file, web-playable formats, progressive HTTP Range streaming)
 
 ---
 
@@ -254,7 +260,9 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (private bucket + presigned GET)** — keeps playback and download off the API while preserving a single authorization point, and reuses the presigning infrastructure of TD-03; Range/206 is delegated to the storage that implements it natively.
 
-**Decision:** _[pending]_
+**Decision:** A (private bucket + presigned GET; storage serves Range/206)
+**Revisions:**
+- 2026-10-26 — Phase 03 access rule clarified (AMB-1): stream and download URL issuance is authenticated and restricted to the owner channel, for `ready` videos only. Phase 04 (visibility) and Phase 05 (anonymous access) extend this rule. Rationale: owner-only until visibility rules exist.
 
 ---
 
@@ -287,7 +295,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (crypto base64url + unique constraint + retry)** — short, unique and unguessable with no dependency and no Node-version friction; the constraint provides the guarantee, the randomness keeps links private.
 
-**Decision:** _[pending]_
+**Decision:** A (11-char base64url from `crypto.randomBytes(8)` + unique constraint + retry)
 
 ---
 
@@ -316,7 +324,9 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A** — implements exactly the required cycle, distinguishes retriable from non-retriable failures with the queue's own primitives (TD-04 A), and keeps the job idempotent under at-least-once delivery.
 
-**Decision:** _[pending]_
+**Decision:** A (`draft → processing → ready | failed`; retries for transient errors, fail-fast for invalid media)
+**Revisions:**
+- 2026-10-26 — Meaning of "rascunho" clarified (AMB-4): `draft` is a processing-pipeline state (pre-registered, upload not yet completed). Phase 04 adds a separate publication/visibility field without migrating `status`. Rationale: matches the required cycle rascunho → processando → pronto/erro and keeps Phase 04 additive.
 
 ---
 
@@ -341,7 +351,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A** — the only option where the 10GB limit is actually enforced, at negligible cost, without routing bytes through the API.
 
-**Decision:** _[pending]_
+**Decision:** A (declared size/MIME at create + actual size at complete + media verified by worker)
 
 ---
 
@@ -377,6 +387,8 @@ _Subprojects in scope:_
 - **Third-party maintenance** — acceptable for the local/dev scope of this deliverable; production targets AWS S3 (or AIStor) through configuration only (TD-02). Option B stays documented as the official alternative for whoever accepts the license step.
 
 **Decision:** A (`pgsty/silo`, pinned release tag) — chosen by the user on 2026-10-26.
+**Revisions:**
+- 2026-10-26 — Storage test strategy clarified (IC-1): integration and e2e tests that touch storage run against the real MinIO (`pgsty/silo`) service in Compose, overriding the testing guide's local-filesystem adapter for this phase; the test environment points the public (presign) endpoint at the internal endpoint so tests can use presigned URLs from inside the container. Rationale: S3-specific paths (presigned multipart, presigned GET, Range) cannot be exercised by a local-filesystem adapter.
 
 ---
 
@@ -384,17 +396,17 @@ _Subprojects in scope:_
 
 | ID | Scope | Decision | Recommendation | Choice |
 |----|-------|----------|----------------|--------|
-| TD-01 | Backend | Bucket & object key organization | **A** (single private bucket, `videos/{videoId}/…`) | _[pending]_ |
-| TD-02 | Backend | S3 client library | **A** (AWS SDK v3 + request presigner) | _[pending]_ |
-| TD-03 | Backend | Upload strategy for 10GB | **A** (S3 multipart with presigned parts, client → storage) | _[pending]_ |
-| TD-04 | Backend | Job queue technology | **A** (BullMQ + Redis, `@nestjs/bullmq@11`) | _[pending]_ |
-| TD-05 | Backend | Video worker topology | **A** (separate process, same codebase, own container) | _[pending]_ |
-| TD-06 | Backend | FFmpeg / ffprobe integration | **A** (system FFmpeg + typed `spawn` wrapper) | _[pending]_ |
-| TD-07 | Backend | Processing output & streaming format | **A** (original file, web-playable formats, HTTP Range) | _[pending]_ |
-| TD-08 | Backend | Streaming & download delivery path | **A** (private bucket + presigned GET; storage serves 206) | _[pending]_ |
-| TD-09 | Backend | Unique short video identifier | **A** (11-char base64url from `crypto` + unique constraint + retry) | _[pending]_ |
-| TD-10 | Backend | Status lifecycle & failure handling | **A** (`draft → processing → ready/failed`; retries for transient, fail-fast for invalid media) | _[pending]_ |
-| TD-11 | Backend | Upload size & type enforcement | **A** (create + complete + worker checks) | _[pending]_ |
+| TD-01 | Backend | Bucket & object key organization | **A** (single private bucket, `videos/{videoId}/…`) | **A** |
+| TD-02 | Backend | S3 client library | **A** (AWS SDK v3 + request presigner) | **A** |
+| TD-03 | Backend | Upload strategy for 10GB | **A** (S3 multipart with presigned parts, client → storage) | **A** |
+| TD-04 | Backend | Job queue technology | **A** (BullMQ + Redis, `@nestjs/bullmq@11`) | **A** |
+| TD-05 | Backend | Video worker topology | **A** (separate process, same codebase, own container) | **A** |
+| TD-06 | Backend | FFmpeg / ffprobe integration | **A** (system FFmpeg + typed `spawn` wrapper) | **A** |
+| TD-07 | Backend | Processing output & streaming format | **A** (original file, web-playable formats, HTTP Range) | **A** |
+| TD-08 | Backend | Streaming & download delivery path | **A** (private bucket + presigned GET; storage serves 206) | **A** |
+| TD-09 | Backend | Unique short video identifier | **A** (11-char base64url from `crypto` + unique constraint + retry) | **A** |
+| TD-10 | Backend | Status lifecycle & failure handling | **A** (`draft → processing → ready/failed`; retries for transient, fail-fast for invalid media) | **A** |
+| TD-11 | Backend | Upload size & type enforcement | **A** (create + complete + worker checks) | **A** |
 | TD-12 | Backend | MinIO container image source | **A** (`pgsty/silo`, pinned release tag) | **A** |
 
 ---
