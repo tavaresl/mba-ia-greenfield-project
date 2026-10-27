@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 6/12 completed
+**SIs:** 7/12 completed
 
 ### SI-03.1 — Infra: Storage and Queue Services, Dependencies, and Configuration Namespaces
 - **Status:** completed
@@ -64,9 +64,13 @@
   - Response DTOs live in `dto/upload-parts-response.dto.ts` (`*.dto.ts` so the Swagger CLI plugin infers them); `openapi.json` is regenerated in SI-03.12.
 
 ### SI-03.7 — Endpoint POST /videos/:publicId/upload/complete (Completion, Size Check, and Enqueue)
-- **Status:** pending
-- **Tests:** pending
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 15 passing in the SI's files (8 `completeUpload` unit, 2 integration against real DB + MinIO + Redis, 5 e2e from `videos-upload-complete.plan.md`); regression 203 unit/integration + 70 e2e passing (2 consecutive full runs of each); `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors)
+- **Observations:**
+  - Sequence in `completeUpload`: owner check → `draft` check → `CompleteMultipartUpload` (parts sorted/de-duplicated in `StorageService`) → clear `upload_id` → `HeadObject` size check against `VIDEO_MAX_UPLOAD_BYTES` → conditional `draft → processing` (`WHERE status = 'draft'`, 0 affected → `VIDEO_NOT_UPLOADABLE`) → enqueue; on enqueue failure the status is reverted to `draft` and the error rethrown. Clearing `upload_id` before the size check lets a retry skip re-assembly.
+  - Known gaps, not covered by the plan: (1) if the process dies between the `processing` update and the enqueue, the video stays `processing` with no job (TD-04 flagged the non-atomic enqueue; the revert only covers a thrown error); (2) on an oversize file the object is deleted but a failure of the following `failed` update would leave the row `draft` without an object, and a retry would fail at `HeadObject`; (3) two concurrent `complete` calls: the second fails at `CompleteMultipartUpload` with `INVALID_UPLOAD_PARTS` rather than `VIDEO_NOT_UPLOADABLE`.
+  - The integration spec now boots the real `VideosModule` (with `BullModule.forRootAsync`, Redis and `QUEUE_PREFIX=test`) instead of listing providers by hand, and obliterates the test queue before each test; the e2e spec does the same via `AppModule`.
+  - The DTO caps `parts` at 10,000 items (S3 maximum); `part_number` is validated 1–10,000.
 
 ### SI-03.8 — Infra: Video Worker Image, Entrypoint, and Compose Service
 - **Status:** pending

@@ -7,13 +7,18 @@ import { Channel } from '../channels/entities/channel.entity';
 import { isPgUniqueViolationOnColumn } from '../common/database/pg-errors';
 import {
   InvalidPartNumbersException,
+  InvalidUploadPartsException,
+  UploadSizeExceededException,
   VideoNotFoundException,
   VideoNotUploadableException,
 } from '../common/exceptions/domain.exception';
 import storageConfig from '../config/storage.config';
 import videosConfig from '../config/videos.config';
+import { MultipartCompletionError } from '../storage/storage.errors';
 import { StorageService } from '../storage/storage.service';
 import type { CreateVideoDto } from './dto/create-video.dto';
+import type { CompleteUploadResponseDto } from './dto/complete-upload-response.dto';
+import type { CompletedPartDto } from './dto/complete-upload.dto';
 import type { CreateVideoResponseDto } from './dto/create-video-response.dto';
 import type {
   SignedPartsResponseDto,
@@ -21,8 +26,10 @@ import type {
 } from './dto/upload-parts-response.dto';
 import { Video, VideoStatus } from './entities/video.entity';
 import { generatePublicId } from './public-id.util';
+import { VideoProcessingProducer } from './video-processing.producer';
 import {
   PUBLIC_ID_MAX_ATTEMPTS,
+  VIDEO_FAILURE_REASONS,
   VIDEO_FILE_EXTENSIONS,
 } from './videos.constants';
 
@@ -38,6 +45,7 @@ export class VideosService {
     private readonly config: ConfigType<typeof videosConfig>,
     @Inject(storageConfig.KEY)
     private readonly storageSettings: ConfigType<typeof storageConfig>,
+    private readonly processing: VideoProcessingProducer,
   ) {}
 
   async createDraft(
@@ -126,6 +134,72 @@ export class VideosService {
         size,
       })),
     };
+  }
+
+  async completeUpload(
+    userId: string,
+    publicId: string,
+    parts: CompletedPartDto[],
+  ): Promise<CompleteUploadResponseDto> {
+    const video = await this.findOwnedOrFail(userId, publicId);
+    if (video.status !== VideoStatus.DRAFT) {
+      throw new VideoNotUploadableException();
+    }
+
+    // upload_id is cleared once the multipart upload is assembled, so a retry
+    // (e.g. after a failed enqueue) skips straight to the size check.
+    if (video.upload_id) {
+      try {
+        await this.storage.completeMultipartUpload(
+          video.storage_key,
+          video.upload_id,
+          parts.map(({ part_number, etag }) => ({
+            partNumber: part_number,
+            etag,
+          })),
+        );
+      } catch (error) {
+        if (error instanceof MultipartCompletionError) {
+          throw new InvalidUploadPartsException();
+        }
+        throw error;
+      }
+      await this.videos.update({ id: video.id }, { upload_id: null });
+    }
+
+    const { contentLength } = await this.storage.headObject(video.storage_key);
+    if (contentLength > this.config.maxUploadBytes) {
+      await this.storage.deleteObject(video.storage_key);
+      await this.videos.update(
+        { id: video.id },
+        {
+          status: VideoStatus.FAILED,
+          failure_reason: VIDEO_FAILURE_REASONS.UPLOAD_SIZE_EXCEEDED,
+        },
+      );
+      throw new UploadSizeExceededException();
+    }
+
+    // Conditional transition: only one concurrent request may move draft -> processing.
+    const moved = await this.videos.update(
+      { id: video.id, status: VideoStatus.DRAFT },
+      { status: VideoStatus.PROCESSING, file_size: contentLength },
+    );
+    if (!moved.affected) {
+      throw new VideoNotUploadableException();
+    }
+
+    try {
+      await this.processing.enqueue(video.id);
+    } catch (error) {
+      await this.videos.update(
+        { id: video.id, status: VideoStatus.PROCESSING },
+        { status: VideoStatus.DRAFT },
+      );
+      throw error;
+    }
+
+    return { id: video.public_id, status: VideoStatus.PROCESSING };
   }
 
   async cancelUpload(userId: string, publicId: string): Promise<void> {

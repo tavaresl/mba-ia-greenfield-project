@@ -19,6 +19,8 @@ import { SkipThrottle } from '@nestjs/throttler';
 import type { JwtPayload } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { ApiErrorEnvelope } from '../common/openapi/api-error-envelope.dto';
+import { CompleteUploadResponseDto } from './dto/complete-upload-response.dto';
+import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CreateVideoResponseDto } from './dto/create-video-response.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { SignUploadPartsDto } from './dto/sign-upload-parts.dto';
@@ -140,6 +142,51 @@ export class VideosController {
     @Param('publicId') publicId: string,
   ): Promise<UploadedPartsResponseDto> {
     return this.videosService.listUploadedParts(user.sub, publicId);
+  }
+
+  @Post(':publicId/upload/complete')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: 'Complete the upload and start processing',
+    description:
+      'Closes the multipart upload, verifies the assembled size, moves the video to processing and enqueues its processing job.',
+  })
+  @ApiResponse({
+    status: 202,
+    description: 'Upload completed; processing queued',
+    type: CompleteUploadResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Validation failed',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found (or not owned by the caller)',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Video is not accepting uploads',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 422,
+    description: 'Invalid parts, or the assembled file exceeds the size limit',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async completeUpload(
+    @CurrentUser() user: JwtPayload,
+    @Param('publicId') publicId: string,
+    @Body() dto: CompleteUploadDto,
+  ): Promise<CompleteUploadResponseDto> {
+    return this.videosService.completeUpload(user.sub, publicId, dto.parts);
   }
 
   @Delete(':publicId/upload')

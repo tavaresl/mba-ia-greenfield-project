@@ -1,13 +1,15 @@
-import { ConfigModule } from '@nestjs/config';
+import { BullModule, getQueueToken } from '@nestjs/bullmq';
+import { ConfigModule, type ConfigType } from '@nestjs/config';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import type { Queue } from 'bullmq';
 import { DataSource } from 'typeorm';
 import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { VerificationToken } from '../auth/entities/verification-token.entity';
 import { Channel } from '../channels/entities/channel.entity';
+import queueConfig from '../config/queue.config';
 import storageConfig from '../config/storage.config';
 import videosConfig from '../config/videos.config';
-import { StorageModule } from '../storage/storage.module';
 import { StorageService } from '../storage/storage.service';
 import {
   cleanAllTables,
@@ -16,10 +18,13 @@ import {
 import { User } from '../users/entities/user.entity';
 import { randomBytes } from 'crypto';
 import {
+  UploadSizeExceededException,
   VideoNotFoundException,
   VideoNotUploadableException,
 } from '../common/exceptions/domain.exception';
 import { Video, VideoStatus } from './entities/video.entity';
+import { VIDEO_PROCESSING_QUEUE } from './video-processing.constants';
+import { VideosModule } from './videos.module';
 import { VideosService } from './videos.service';
 
 const ALL_ENTITIES = [User, Channel, RefreshToken, VerificationToken, Video];
@@ -29,6 +34,7 @@ describe('VideosService (integration)', () => {
   let service: VideosService;
   let dataSource: DataSource;
   let storage: StorageService;
+  let queue: Queue;
   let userId: string;
   let channelId: string;
   const uploadsToAbort: { key: string; uploadId: string }[] = [];
@@ -38,20 +44,27 @@ describe('VideosService (integration)', () => {
       imports: [
         ConfigModule.forRoot({
           isGlobal: true,
-          load: [storageConfig, videosConfig],
+          load: [queueConfig, storageConfig, videosConfig],
         }),
         TypeOrmModule.forRoot(createTestDataSource(ALL_ENTITIES).options),
-        TypeOrmModule.forFeature([Video, Channel]),
-        StorageModule,
+        BullModule.forRootAsync({
+          inject: [queueConfig.KEY],
+          useFactory: (queue: ConfigType<typeof queueConfig>) => ({
+            connection: { host: queue.host, port: queue.port },
+            prefix: queue.prefix,
+          }),
+        }),
+        VideosModule,
       ],
-      providers: [VideosService],
     }).compile();
     service = module.get(VideosService);
+    queue = module.get(getQueueToken(VIDEO_PROCESSING_QUEUE));
     dataSource = module.get(DataSource);
     storage = module.get(StorageService);
   });
 
   beforeEach(async () => {
+    await queue.obliterate({ force: true });
     await cleanAllTables(dataSource);
     const user = await dataSource.getRepository(User).save({
       email: 'owner@example.com',
@@ -73,6 +86,7 @@ describe('VideosService (integration)', () => {
   });
 
   afterAll(async () => {
+    await queue.obliterate({ force: true });
     await module.close();
   });
 
@@ -196,6 +210,80 @@ describe('VideosService (integration)', () => {
       await expect(
         service.cancelUpload(userId, row.public_id),
       ).rejects.toBeInstanceOf(VideoNotUploadableException);
+    });
+  });
+
+  describe('completeUpload', () => {
+    async function uploadParts(sizes: number[], declared: number) {
+      const created = await service.createDraft(userId, {
+        title: 'Complete me',
+        file_name: 'clip.mp4',
+        file_size: declared,
+        mime_type: 'video/mp4',
+      });
+      const row = await dataSource
+        .getRepository(Video)
+        .findOneByOrFail({ public_id: created.id });
+      uploadsToAbort.push({ key: row.storage_key, uploadId: row.upload_id! });
+
+      const signed = await service.signUploadParts(
+        userId,
+        row.public_id,
+        sizes.map((_, index) => index + 1),
+      );
+      const parts = await Promise.all(
+        signed.parts.map(async ({ part_number, url }) => {
+          const response = await fetch(url, {
+            method: 'PUT',
+            body: new Uint8Array(randomBytes(sizes[part_number - 1])),
+          });
+          return { part_number, etag: response.headers.get('etag')! };
+        }),
+      );
+      return { row, parts };
+    }
+
+    it('should complete out-of-order parts, move to processing and enqueue one job', async () => {
+      const { row, parts } = await uploadParts([5242880, 1048576], 6291456);
+
+      const result = await service.completeUpload(
+        userId,
+        row.public_id,
+        [...parts].reverse(),
+      );
+
+      const updated = await dataSource
+        .getRepository(Video)
+        .findOneByOrFail({ id: row.id });
+      expect(result).toEqual({ id: row.public_id, status: 'processing' });
+      expect(updated.status).toBe(VideoStatus.PROCESSING);
+      expect(updated.file_size).toBe(6291456);
+      expect(updated.upload_id).toBeNull();
+      await expect(storage.headObject(row.storage_key)).resolves.toEqual({
+        contentLength: 6291456,
+      });
+      const jobs = await queue.getJobs(['waiting']);
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0].data).toEqual({ videoId: row.id });
+    });
+
+    it('should delete an object above the size limit and mark the video failed', async () => {
+      const { row, parts } = await uploadParts(
+        [5242880, 5242880, 5242880],
+        12582912,
+      );
+
+      await expect(
+        service.completeUpload(userId, row.public_id, parts),
+      ).rejects.toBeInstanceOf(UploadSizeExceededException);
+
+      const updated = await dataSource
+        .getRepository(Video)
+        .findOneByOrFail({ id: row.id });
+      expect(updated.status).toBe(VideoStatus.FAILED);
+      expect(updated.failure_reason).toBe('UPLOAD_SIZE_EXCEEDED');
+      await expect(storage.headObject(row.storage_key)).rejects.toBeDefined();
+      expect(await queue.getJobCounts('waiting')).toEqual({ waiting: 0 });
     });
   });
 });

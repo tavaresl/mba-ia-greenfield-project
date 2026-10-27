@@ -13,3 +13,10 @@ export const VIDEO_TITLE_MAX_LENGTH = 100;
 export const VIDEO_FILE_NAME_MAX_LENGTH = 255;
 export const PUBLIC_ID_MAX_ATTEMPTS = 5;
 export const MAX_PART_NUMBERS_PER_REQUEST = 100;
+// S3 allows at most 10,000 parts per multipart upload.
+export const MAX_MULTIPART_PARTS = 10000;
+export const MAX_PARTS_PER_COMPLETION = MAX_MULTIPART_PARTS;
+
+export const VIDEO_FAILURE_REASONS = {
+  UPLOAD_SIZE_EXCEEDED: 'UPLOAD_SIZE_EXCEEDED',
+} as const;
