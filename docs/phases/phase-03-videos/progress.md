@@ -1,6 +1,6 @@
 # phase-03-videos — Progress
 
-**Status:** in_progress
+**Status:** completed
 **SIs:** 12/12 completed
 
 ### SI-03.1 — Infra: Storage and Queue Services, Dependencies, and Configuration Namespaces
@@ -127,3 +127,8 @@
   - Documentation: `nestjs-project/CLAUDE.md` gained readiness checks for Redis/MinIO, the new services, where each test suite runs (unit/integration in `video-worker`, e2e in `nestjs-api`, always with `--forceExit`), and a "Videos (Phase 03)" section (modules, 8 endpoints, flow, configuration incl. why `S3_PUBLIC_ENDPOINT` is the only host-facing value, worker/FFmpeg, test-isolation caveats, rate-limit exemption, OpenAPI). A script checked that every path, Compose service, env key, npm script, endpoint and code identifier it mentions exists in the repository (nothing missing).
   - Root `CLAUDE.md`: Message Queue now names BullMQ on Redis, Object Storage names MinIO via `pgsty/silo` over the S3 API, Video Worker describes the separate container. Also fixed an older false statement there (`next-frontend/` "not yet initialized"), since the acceptance criteria fail a CLAUDE.md that contradicts the code.
 
+
+## Final verification
+
+- Infra up (`db`, `mailpit`, `minio`, `redis`, `nestjs-api`, `video-worker`); unit/integration in `video-worker`: 265 passing, 36 suites; e2e in `nestjs-api`: 75 passing, 7 suites; `npx tsc --noEmit` exit 0.
+- **`npm run lint` fails (190 problems, 150 errors, 40 warnings) — accepted as pre-existing debt** (decision: user). The same count existed on the baseline before this phase; the errors are mostly `@typescript-eslint/no-unsafe-*` in older specs, and none were introduced by Phase 03. The DoD item "lint passes" is therefore not met; fixing it (clean the specs or adjust the rule) is a separate scope for its own branch.
