@@ -1,6 +1,8 @@
 FROM node:25.6.0-slim
 
-RUN apt update && apt install -y procps curl
+# ffmpeg (ffmpeg + ffprobe) is only needed by the media specs run via `npm test`.
+RUN apt update && apt install -y --no-install-recommends ffmpeg procps curl \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /home/node/app
 
