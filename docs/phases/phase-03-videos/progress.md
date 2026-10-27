@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 1/12 completed
+**SIs:** 2/12 completed
 
 ### SI-03.1 — Infra: Storage and Queue Services, Dependencies, and Configuration Namespaces
 - **Status:** completed
@@ -14,9 +14,13 @@
   - `.env` (gitignored) was extended with the new keys; `S3_ACCESS_KEY`/`S3_SECRET_KEY` defaults in `.env.example` are development-only values.
 
 ### SI-03.2 — Storage Module (S3 Clients, Multipart and Presigned Operations)
-- **Status:** pending
-- **Tests:** pending
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 9 passing (8 integration against real MinIO + 1 module compilation); regression 158 unit/integration + 52 e2e passing; `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors)
+- **Observations:**
+  - `StorageModule` exports `StorageService` and the internal S3 client token (`S3_INTERNAL_CLIENT`); the signing client stays private to the module. The test cleanup helper `src/test/storage.ts` takes the internal client.
+  - Beyond the plan's list, the integration spec also covers `deleteObject` and `listParts` after `abortMultipartUpload` (`NoSuchUpload`), and checks presigned URL origins with a config override (public vs internal endpoint).
+  - `ts-jest` did not flag a `Buffer` passed as `fetch` body, but `tsc --noEmit` did (fixed in the spec with `new Uint8Array(body)`); keep running `tsc` after specs.
+  - Presigned `UploadPart` PUTs worked against `pgsty/silo` with `requestChecksumCalculation: 'WHEN_REQUIRED'`, as the library-refs caution anticipated.
 
 ### SI-03.3 — Video Entity, CreateVideos Migration, and Public ID Generator
 - **Status:** pending
