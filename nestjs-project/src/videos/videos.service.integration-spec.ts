@@ -16,10 +16,11 @@ import {
   createTestDataSource,
 } from '../test/create-test-data-source';
 import { User } from '../users/entities/user.entity';
-import { randomBytes } from 'crypto';
+import { randomBytes, randomUUID } from 'crypto';
 import {
   UploadSizeExceededException,
   VideoNotFoundException,
+  VideoNotReadyException,
   VideoNotUploadableException,
 } from '../common/exceptions/domain.exception';
 import { Video, VideoStatus } from './entities/video.entity';
@@ -284,6 +285,85 @@ describe('VideosService (integration)', () => {
       expect(updated.failure_reason).toBe('UPLOAD_SIZE_EXCEEDED');
       await expect(storage.headObject(row.storage_key)).rejects.toBeDefined();
       expect(await queue.getJobCounts('waiting')).toEqual({ waiting: 0 });
+    });
+  });
+
+  describe('stream and download URLs', () => {
+    async function seedReadyVideo(): Promise<Video> {
+      const id = randomUUID();
+      const key = `videos/${id}/original.mp4`;
+      await storage.putObject(key, randomBytes(4096), 'video/mp4');
+      return dataSource.getRepository(Video).save(
+        dataSource.getRepository(Video).create({
+          id,
+          public_id: id.slice(0, 11),
+          channel_id: channelId,
+          title: 'Ready',
+          status: VideoStatus.READY,
+          original_file_name: 'my clip.mp4',
+          mime_type: 'video/mp4',
+          declared_size: 4096,
+          file_size: 4096,
+          storage_key: key,
+        }),
+      );
+    }
+
+    afterEach(async () => {
+      for (const { id } of await dataSource.getRepository(Video).find()) {
+        await storage.deleteObject(`videos/${id}/original.mp4`);
+      }
+    });
+
+    it('should answer a Range request on the stream URL with 206 and 1024 bytes', async () => {
+      const video = await seedReadyVideo();
+
+      const url = await service.getStreamUrl(userId, video.public_id);
+      const response = await fetch(url, { headers: { Range: 'bytes=0-1023' } });
+
+      expect(response.status).toBe(206);
+      expect(response.headers.get('content-range')).toBe('bytes 0-1023/4096');
+      expect((await response.arrayBuffer()).byteLength).toBe(1024);
+    });
+
+    it('should serve the download URL as an attachment with the original name', async () => {
+      const video = await seedReadyVideo();
+
+      const url = await service.getDownloadUrl(userId, video.public_id);
+      const response = await fetch(url);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-disposition')).toBe(
+        'attachment; filename="my clip.mp4"',
+      );
+    });
+
+    it('should expose the video with a working thumbnail URL', async () => {
+      const video = await seedReadyVideo();
+      const thumbnailKey = `videos/${video.id}/thumbnail.jpg`;
+      await storage.putObject(thumbnailKey, randomBytes(64), 'image/jpeg');
+      await dataSource
+        .getRepository(Video)
+        .update({ id: video.id }, { thumbnail_key: thumbnailKey });
+
+      const result = await service.getOwnedVideo(userId, video.public_id);
+      const response = await fetch(result.thumbnail_url!);
+
+      expect(result.status).toBe('ready');
+      expect(response.status).toBe(200);
+      expect(response.headers.get('content-type')).toBe('image/jpeg');
+      await storage.deleteObject(thumbnailKey);
+    });
+
+    it('should refuse to stream a video that is not ready', async () => {
+      const video = await seedReadyVideo();
+      await dataSource
+        .getRepository(Video)
+        .update({ id: video.id }, { status: VideoStatus.PROCESSING });
+
+      await expect(
+        service.getStreamUrl(userId, video.public_id),
+      ).rejects.toBeInstanceOf(VideoNotReadyException);
     });
   });
 });

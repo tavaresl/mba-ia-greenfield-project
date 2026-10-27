@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 10/12 completed
+**SIs:** 11/12 completed
 
 ### SI-03.1 — Infra: Storage and Queue Services, Dependencies, and Configuration Namespaces
 - **Status:** completed
@@ -108,9 +108,14 @@
   - The live check left one user/video in the dev DB and objects in MinIO; the next test run's cleanup removes them.
 
 ### SI-03.11 — Endpoints for Video Status, Streaming, and Download
-- **Status:** pending
-- **Tests:** pending
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 17 passing in the SI's files (8 unit, 4 integration against real DB + MinIO, 5 e2e from `videos-read-stream-download.plan.md`); full unit/integration regression in `video-worker`: 255 passing, 36 suites (2 runs); e2e in `nestjs-api`: 75 passing, 7 suites (2 runs); `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors)
+- **Observations:**
+  - `GET /videos/:publicId/stream` and `/download` use `@Redirect(undefined, 302)` and return `{ url }`; the e2e follows the `Location` with `fetch` against the real MinIO and checks `206` + `Content-Range: bytes 0-1023/4096` (1024 bytes) and `Content-Disposition: attachment; filename="my clip.mp4"`.
+  - Both URLs and `thumbnail_url` are signed with the **public** signer and `S3_DOWNLOAD_URL_TTL_SECONDS` (4 h by default). Anyone holding the URL can read that one object until it expires (as stated in the Authorization Matrix); the `Location` header therefore must not be logged by proxies in production.
+  - `ResponseContentDisposition` escapes `"` in the file name but does not encode non-ASCII characters: a name with accents or emoji would put non-Latin-1 characters in a header value. Not covered by the plan (a `filename*=UTF-8''...` form would be the fix); worth a follow-up before exposing downloads to the browser.
+  - `file_size`, durations and bitrate come from the entity transformer / double columns as numbers; `created_at`/`updated_at` are returned as ISO-8601 strings.
+  - The unit spec's second describe now mocks `presignGetObject`; the integration spec deletes the seeded `videos/{id}/original.mp4` objects in `afterEach` in addition to the global cleanup.
 
 ### SI-03.12 — OpenAPI Artifact and AI Documentation for Videos
 - **Status:** pending

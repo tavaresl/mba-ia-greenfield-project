@@ -10,6 +10,7 @@ import {
   InvalidUploadPartsException,
   UploadSizeExceededException,
   VideoNotFoundException,
+  VideoNotReadyException,
   VideoNotUploadableException,
 } from '../common/exceptions/domain.exception';
 import storageConfig from '../config/storage.config';
@@ -20,6 +21,7 @@ import type { CreateVideoDto } from './dto/create-video.dto';
 import type { CompleteUploadResponseDto } from './dto/complete-upload-response.dto';
 import type { CompletedPartDto } from './dto/complete-upload.dto';
 import type { CreateVideoResponseDto } from './dto/create-video-response.dto';
+import type { VideoResponseDto } from './dto/video-response.dto';
 import type {
   SignedPartsResponseDto,
   UploadedPartsResponseDto,
@@ -202,6 +204,28 @@ export class VideosService {
     return { id: video.public_id, status: VideoStatus.PROCESSING };
   }
 
+  async getOwnedVideo(
+    userId: string,
+    publicId: string,
+  ): Promise<VideoResponseDto> {
+    const video = await this.findOwnedOrFail(userId, publicId);
+    return this.toResponse(video);
+  }
+
+  async getStreamUrl(userId: string, publicId: string): Promise<string> {
+    const video = this.requireReady(
+      await this.findOwnedOrFail(userId, publicId),
+    );
+    return this.presignOriginal(video);
+  }
+
+  async getDownloadUrl(userId: string, publicId: string): Promise<string> {
+    const video = this.requireReady(
+      await this.findOwnedOrFail(userId, publicId),
+    );
+    return this.presignOriginal(video, video.original_file_name);
+  }
+
   async cancelUpload(userId: string, publicId: string): Promise<void> {
     const video = await this.findOwnedOrFail(userId, publicId);
     if (video.status !== VideoStatus.DRAFT) {
@@ -223,6 +247,52 @@ export class VideosService {
     });
     if (!video) throw new VideoNotFoundException();
     return video;
+  }
+
+  private requireReady(video: Video): Video {
+    if (video.status !== VideoStatus.READY) throw new VideoNotReadyException();
+    return video;
+  }
+
+  // Signed for the client-reachable endpoint: storage serves Range/206 itself.
+  private presignOriginal(
+    video: Video,
+    downloadFileName?: string,
+  ): Promise<string> {
+    return this.storage.presignGetObject(video.storage_key, {
+      signer: 'public',
+      expiresIn: this.storageSettings.downloadUrlTtlSeconds,
+      downloadFileName,
+    });
+  }
+
+  private async toResponse(video: Video): Promise<VideoResponseDto> {
+    const thumbnailUrl = video.thumbnail_key
+      ? await this.storage.presignGetObject(video.thumbnail_key, {
+          signer: 'public',
+          expiresIn: this.storageSettings.downloadUrlTtlSeconds,
+        })
+      : null;
+
+    return {
+      id: video.public_id,
+      title: video.title,
+      status: video.status,
+      failure_reason: video.failure_reason,
+      original_file_name: video.original_file_name,
+      mime_type: video.mime_type,
+      file_size: video.file_size,
+      duration_seconds: video.duration_seconds,
+      width: video.width,
+      height: video.height,
+      video_codec: video.video_codec,
+      audio_codec: video.audio_codec,
+      container_format: video.container_format,
+      bitrate: video.bitrate,
+      thumbnail_url: thumbnailUrl,
+      created_at: video.created_at.toISOString(),
+      updated_at: video.updated_at.toISOString(),
+    };
   }
 
   private requireOpenUpload(video: Video): Video {

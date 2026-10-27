@@ -7,6 +7,7 @@ import {
   HttpStatus,
   Param,
   Post,
+  Redirect,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -24,6 +25,7 @@ import { CompleteUploadDto } from './dto/complete-upload.dto';
 import { CreateVideoResponseDto } from './dto/create-video-response.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { SignUploadPartsDto } from './dto/sign-upload-parts.dto';
+import { VideoResponseDto } from './dto/video-response.dto';
 import {
   SignedPartsResponseDto,
   UploadedPartsResponseDto,
@@ -217,5 +219,99 @@ export class VideosController {
     @Param('publicId') publicId: string,
   ): Promise<void> {
     return this.videosService.cancelUpload(user.sub, publicId);
+  }
+
+  @Get(':publicId')
+  @ApiOperation({
+    summary: 'Get a video',
+    description:
+      'Returns status and metadata; poll it after completing an upload to follow processing.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'The video',
+    type: VideoResponseDto,
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found (or not owned by the caller)',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async getVideo(
+    @CurrentUser() user: JwtPayload,
+    @Param('publicId') publicId: string,
+  ): Promise<VideoResponseDto> {
+    return this.videosService.getOwnedVideo(user.sub, publicId);
+  }
+
+  @Get(':publicId/stream')
+  @Redirect(undefined, HttpStatus.FOUND)
+  @ApiOperation({
+    summary: 'Stream a video',
+    description:
+      'Redirects to a short-lived presigned URL of the original file; storage answers Range requests with 206 Partial Content.',
+  })
+  @ApiResponse({
+    status: 302,
+    description: 'Redirect to the presigned URL (Location header)',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found (or not owned by the caller)',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Video is not ready',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async stream(
+    @CurrentUser() user: JwtPayload,
+    @Param('publicId') publicId: string,
+  ): Promise<{ url: string }> {
+    return { url: await this.videosService.getStreamUrl(user.sub, publicId) };
+  }
+
+  @Get(':publicId/download')
+  @Redirect(undefined, HttpStatus.FOUND)
+  @ApiOperation({
+    summary: 'Download a video',
+    description:
+      'Redirects to a presigned URL that forces Content-Disposition: attachment with the original file name.',
+  })
+  @ApiResponse({
+    status: 302,
+    description: 'Redirect to the presigned URL (Location header)',
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found (or not owned by the caller)',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Video is not ready',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async download(
+    @CurrentUser() user: JwtPayload,
+    @Param('publicId') publicId: string,
+  ): Promise<{ url: string }> {
+    return { url: await this.videosService.getDownloadUrl(user.sub, publicId) };
   }
 }
