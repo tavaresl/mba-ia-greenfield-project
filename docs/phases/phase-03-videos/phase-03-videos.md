@@ -27,15 +27,15 @@ Deliver video upload and processing in `nestjs-project`: S3-compatible object st
 
 1. Install production dependencies in `nestjs-project` (inside the container): `@aws-sdk/client-s3@^3.1157.0`, `@aws-sdk/s3-request-presigner@^3.1157.0` (per `phase-03-videos/TD-02`), `@nestjs/bullmq@^11.0.5`, `bullmq@^6.5.0` (per `phase-03-videos/TD-04`) — versions and the "stay on `@nestjs/bullmq` 11.x" constraint per `library-refs.md`.
 2. Add services to `nestjs-project/compose.yaml`: `minio` — image `pgsty/silo:RELEASE.2026-10-18T00-00-00Z` (standard variant, never `latest`/`-distroless`), command `server /data --console-address ":9001"`, `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`, ports `9000:9000` and `9001:9001`, named volume for `/data`, `curl` healthcheck on `/minio/health/live` (per `phase-03-videos/TD-12`); `minio-init` — same image, one-shot entrypoint running `mc alias set` + `mc mb --ignore-existing local/${S3_BUCKET}`, `depends_on: minio (service_healthy)`; `redis` — pinned `redis:7.4-alpine` with a `redis-cli ping` healthcheck (per `phase-03-videos/TD-04`). Make `nestjs-api` depend on `minio-init (service_completed_successfully)` and `redis (service_healthy)` so the bucket exists before any storage call (per `phase-03-videos/TD-12` — `NoSuchBucket` caution).
-3. Create `src/config/storage.config.ts` — `registerAs('storage', ...)` reading `S3_ENDPOINT` (default `'http://minio:9000'`, in-network), `S3_PUBLIC_ENDPOINT` (default `'http://localhost:9000'`, client-reachable — used only to sign URLs consumed outside the Compose network), `S3_REGION` (default `'us-east-1'`), `S3_ACCESS_KEY`, `S3_SECRET_KEY` (required), `S3_BUCKET` (default `'streamtube'`), `S3_UPLOAD_URL_TTL_SECONDS` (default `3600`), `S3_DOWNLOAD_URL_TTL_SECONDS` (default `14400`); and `src/config/queue.config.ts` — `registerAs('queue', ...)` reading `REDIS_HOST` (default `'redis'`), `REDIS_PORT` (default `6379`), `QUEUE_PREFIX` (default `'bull'`) — following `phase-01-configuracao-base/TD-03`.
-4. Extend `src/config/env.validation.ts` (Joi, per `phase-01-configuracao-base/TD-02`) with every new key (`S3_ACCESS_KEY`/`S3_SECRET_KEY` required, others with the defaults above), add `storageConfig` and `queueConfig` to `ConfigModule.forRoot({ load })` in `src/app.module.ts`, and document all keys in `.env.example` (service names as hosts; comment that `S3_PUBLIC_ENDPOINT` is the only host-facing value).
-5. Create `src/test/setup-test-env.ts` — loaded after `dotenv/config` in both `package.json` jest `setupFiles` and `test/jest-e2e.json` — that sets `S3_PUBLIC_ENDPOINT = S3_ENDPOINT` (tests run inside the Compose network and must reach presigned URLs; per `phase-03-videos/TD-12` revision, IC-1) and `QUEUE_PREFIX = 'test'` (isolates test jobs from the running worker).
+3. Create `src/config/storage.config.ts` — `registerAs('storage', ...)` reading `S3_ENDPOINT` (default `'http://minio:9000'`, in-network), `S3_PUBLIC_ENDPOINT` (default `'http://localhost:9000'`, client-reachable — used only to sign URLs consumed outside the Compose network), `S3_REGION` (default `'us-east-1'`), `S3_ACCESS_KEY`, `S3_SECRET_KEY` (required), `S3_BUCKET` (default `'streamtube'`), `S3_UPLOAD_URL_TTL_SECONDS` (default `3600`), `S3_DOWNLOAD_URL_TTL_SECONDS` (default `14400`); `src/config/queue.config.ts` — `registerAs('queue', ...)` reading `REDIS_HOST` (default `'redis'`), `REDIS_PORT` (default `6379`), `QUEUE_PREFIX` (default `'bull'`); and `src/config/videos.config.ts` — `registerAs('videos', ...)` reading `VIDEO_MAX_UPLOAD_BYTES` (default `10737418240`, the TD-11 limit) and `VIDEO_UPLOAD_PART_SIZE_BYTES` (default `104857600`) — following `phase-01-configuracao-base/TD-03`.
+4. Extend `src/config/env.validation.ts` (Joi, per `phase-01-configuracao-base/TD-02`) with every new key (`S3_ACCESS_KEY`/`S3_SECRET_KEY` required; `VIDEO_MAX_UPLOAD_BYTES` integer 1–10737418240 so it can never exceed the 10 GiB limit of `phase-03-videos/TD-11`; `VIDEO_UPLOAD_PART_SIZE_BYTES` integer 5242880–5368709120, the S3 part-size bounds; others with the defaults above), add `storageConfig`, `queueConfig` and `videosConfig` to `ConfigModule.forRoot({ load })` in `src/app.module.ts`, and document all keys in `.env.example` (service names as hosts; comment that `S3_PUBLIC_ENDPOINT` is the only host-facing value).
+5. Create `src/test/setup-test-env.ts` — loaded after `dotenv/config` in both `package.json` jest `setupFiles` and `test/jest-e2e.json` — that sets `S3_PUBLIC_ENDPOINT = S3_ENDPOINT` (tests run inside the Compose network and must reach presigned URLs; per `phase-03-videos/TD-12` revision, IC-1), `QUEUE_PREFIX = 'test'` (isolates test jobs from the running worker), `VIDEO_UPLOAD_PART_SIZE_BYTES = 5242880` and `VIDEO_MAX_UPLOAD_BYTES = 12582912` (multi-part uploads and the size-limit path become testable with a few MiB instead of 100 MiB / 10 GiB).
 
 **Tests:**
 
 | Artifact | Layer | Test file |
 |----------|-------|-----------|
-| `envValidationSchema` (storage/queue keys) | Integration: missing `S3_ACCESS_KEY` / `S3_SECRET_KEY` rejected; defaults applied | `src/config/env.validation.integration-spec.ts` |
+| `envValidationSchema` (storage/queue/videos keys) | Integration: missing `S3_ACCESS_KEY` / `S3_SECRET_KEY` rejected; `VIDEO_MAX_UPLOAD_BYTES` above 10 GiB and `VIDEO_UPLOAD_PART_SIZE_BYTES` below 5 MiB rejected; defaults applied | `src/config/env.validation.integration-spec.ts` |
 
 **Dependencies:** none
 
@@ -44,6 +44,7 @@ Deliver video upload and processing in `nestjs-project`: S3-compatible object st
 - `docker compose up -d` from `nestjs-project/` brings up `db`, `mailpit`, `minio`, `redis` and `nestjs-api`; `minio-init` exits with code 0 and `docker compose ps` shows `minio` and `redis` as healthy
 - After `minio-init` completes, the bucket named by `S3_BUCKET` exists in MinIO (listing it with `mc ls` succeeds)
 - Bootstrapping the application without `S3_ACCESS_KEY` fails Joi validation and the app does not start
+- Bootstrapping with `VIDEO_MAX_UPLOAD_BYTES=10737418241` or `VIDEO_UPLOAD_PART_SIZE_BYTES=1048576` fails Joi validation; without them the defaults `10737418240` and `104857600` apply
 - The MinIO console answers on `http://localhost:9001` from the host
 - The pre-existing test suites (unit, integration, e2e) still pass with the new services running
 
@@ -152,26 +153,28 @@ Deliver video upload and processing in `nestjs-project`: S3-compatible object st
 
 1. Create `src/videos/dto/create-video.dto.ts` — `title`, `file_name`, `file_size`, `mime_type` per `### API Contracts → POST /videos` and `#### Validation Rules — Videos` (class-validator, per `phase-02-auth/TD-06`; payload per `phase-03-videos/TD-03` revision, AMB-2).
 2. Add the Phase 03 domain exceptions to `src/common/exceptions/domain.exception.ts` per `### Error Catalog`: `VideoNotFoundException` (`VIDEO_NOT_FOUND`, 404), `VideoNotUploadableException` (`VIDEO_NOT_UPLOADABLE`, 409), `InvalidUploadPartsException` (`INVALID_UPLOAD_PARTS`, 422), `UploadSizeExceededException` (`UPLOAD_SIZE_EXCEEDED`, 422), `VideoNotReadyException` (`VIDEO_NOT_READY`, 409), `InvalidPartNumbersException` (`VALIDATION_ERROR`, 400) (per `phase-02-auth/TD-07`).
-3. Create `src/videos/videos.service.ts` with `createDraft(userId, dto)`: resolve the caller's channel by `user_id`; generate the internal id (`crypto.randomUUID()`) so `storage_key = videos/{id}/original.{mp4|webm}` is known before insert (per `phase-03-videos/TD-01`); insert the `draft` row with `public_id` from `generatePublicId()`, retrying on unique violation of `public_id` up to 5 times (same pattern as `ChannelsService`, per `phase-03-videos/TD-09`); call `createMultipartUpload` and store `upload_id` (per `phase-03-videos/TD-03`) — if storage fails, delete the row and rethrow; return `part_size = 104857600` and `part_count = ceil(file_size / part_size)`.
-4. Create `src/videos/videos.controller.ts` (`@Controller('videos')`) with `POST /videos` returning `201`, documented with `@ApiTags('videos')`, `@ApiBearerAuth`, `@ApiOperation` and `@ApiResponse` per status using `ApiErrorEnvelope` (per `openapi-docs-nestjs/TD-01` revision); register the controller in `VideosModule`.
+3. Create `src/videos/videos.service.ts` with `createDraft(userId, dto)`: resolve the caller's channel by `user_id`; generate the internal id (`crypto.randomUUID()`) so `storage_key = videos/{id}/original.{mp4|webm}` is known before insert (per `phase-03-videos/TD-01`); insert the `draft` row with `public_id` from `generatePublicId()`, retrying on unique violation of `public_id` up to 5 times (same pattern as `ChannelsService`, per `phase-03-videos/TD-09`); call `createMultipartUpload` and store `upload_id` (per `phase-03-videos/TD-03`) — if storage fails, delete the row and rethrow; return `part_size` from `videosConfig` (`VIDEO_UPLOAD_PART_SIZE_BYTES`) and `part_count = ceil(file_size / part_size)`.
+4. Create `src/videos/videos.controller.ts` (`@Controller('videos')`, class-level `@SkipThrottle()` — the `APP_GUARD` throttler from `AuthModule` is application-wide, see `### API Contracts` intro) with `POST /videos` returning `201`, documented with `@ApiTags('videos')`, `@ApiBearerAuth`, `@ApiOperation` and `@ApiResponse` per status using `ApiErrorEnvelope` (per `openapi-docs-nestjs/TD-01` revision); register the controller in `VideosModule`. Video E2E suites reset the throttler storage in `beforeEach` (as `test/auth.e2e-spec.ts` does), since obtaining access tokens still goes through the throttled auth endpoints.
 
 **Tests:**
 
 | Artifact | Layer | Test file |
 |----------|-------|-----------|
-| `VideosService.createDraft` | Unit (mock repositories/storage): retries `public_id` on unique violation and gives up after 5 attempts; deletes the row when `createMultipartUpload` fails; computes `part_count` | `src/videos/videos.service.spec.ts` |
+| `VideosService.createDraft` | Unit (mock repositories/storage, default `videos` config): retries `public_id` on unique violation and gives up after 5 attempts; deletes the row when `createMultipartUpload` fails; `file_size` 10737418240 at the default part size yields `part_count` 103 | `src/videos/videos.service.spec.ts` |
 | `VideosService.createDraft` | Integration (real DB + MinIO): persists a `draft` row in the caller's channel with `declared_size`, `mime_type`, `original_file_name`, non-null `upload_id` and `storage_key` matching `videos/{id}/original.{ext}` | `src/videos/videos.service.integration-spec.ts` |
 
 **Dependencies:** SI-03.4 — `VideosModule` and queue wiring; SI-03.2 — `StorageService`; SI-03.3 — `Video` entity and public-ID generator
 
 **Acceptance criteria:**
 
-- `POST /videos` with a valid body and access token returns `201` with an 11-character `id`, the `title`, `status: "draft"`, `part_size: 104857600` and `part_count = ceil(file_size / 104857600)`
+- `POST /videos` with a valid body and access token returns `201` with an 11-character `id`, the `title`, `status: "draft"`, `part_size` equal to `VIDEO_UPLOAD_PART_SIZE_BYTES` and `part_count = ceil(file_size / part_size)`
+- With the default part size (104857600), a declared `file_size` of 10737418240 (10 GiB) is accepted and yields `part_count: 103` — within the 10,000-part S3 limit
 - After the call, a `videos` row exists with `status = 'draft'`, `channel_id` = the caller's channel, a non-null `upload_id` and `storage_key` `videos/{id}/original.mp4` for `video/mp4`
 - `POST /videos` with `file_size: 10737418241` returns `400` with `error: "VALIDATION_ERROR"`
 - `POST /videos` with `mime_type: "video/quicktime"` returns `400` with `error: "VALIDATION_ERROR"`
 - `POST /videos` without an access token returns `401`
 - Two consecutive `POST /videos` calls return different `id` values
+- More than 10 requests within one minute to `/videos` endpoints by the same client are not rejected with `429`
 
 ---
 
@@ -221,7 +224,7 @@ Deliver video upload and processing in `nestjs-project`: S3-compatible object st
 **Technical actions:**
 
 1. Create `src/videos/dto/complete-upload.dto.ts` — `parts` array of `{ part_number, etag }` per `#### Validation Rules — Videos` (`@ValidateNested` + `@Type`).
-2. Add `completeUpload(userId, publicId, parts)` to `VideosService`: owner check (`findOwnedOrFail`); `status != 'draft'` → `VideoNotUploadableException`; when `upload_id` is set, call `completeMultipartUpload` (sorted, de-duplicated — per `phase-03-videos/TD-12`) and translate `MultipartCompletionError` → `InvalidUploadPartsException`, then clear `upload_id` (so a retry skips this step); `headObject` → when `ContentLength > 10737418240`, delete the object, set `status = 'failed'`, `failure_reason = 'UPLOAD_SIZE_EXCEEDED'` and throw `UploadSizeExceededException` (per `phase-03-videos/TD-11`).
+2. Add `completeUpload(userId, publicId, parts)` to `VideosService`: owner check (`findOwnedOrFail`); `status != 'draft'` → `VideoNotUploadableException`; when `upload_id` is set, call `completeMultipartUpload` (sorted, de-duplicated — per `phase-03-videos/TD-12`) and translate `MultipartCompletionError` → `InvalidUploadPartsException`, then clear `upload_id` (so a retry skips this step); `headObject` → when `ContentLength > VIDEO_MAX_UPLOAD_BYTES` (from `videosConfig`, default 10737418240), delete the object, set `status = 'failed'`, `failure_reason = 'UPLOAD_SIZE_EXCEEDED'` and throw `UploadSizeExceededException` (per `phase-03-videos/TD-11`).
 3. In the same method: conditional update `draft → processing` setting `file_size` (per `phase-03-videos/TD-10`), then `VideoProcessingProducer.enqueue(video.id)` (per `phase-03-videos/TD-04`); if enqueueing throws, revert `processing → draft` and rethrow so the client can retry (per `### Events/Messages → Producer`).
 4. Add the route to `VideosController` returning `202` with `{ id, status: "processing" }` and Swagger decorators per `### API Contracts`.
 
@@ -230,7 +233,7 @@ Deliver video upload and processing in `nestjs-project`: S3-compatible object st
 | Artifact | Layer | Test file |
 |----------|-------|-----------|
 | `VideosService.completeUpload` | Unit (mock repositories/storage/producer): storage rejection → `InvalidUploadPartsException`; oversize → object deleted + `failed`/`UPLOAD_SIZE_EXCEEDED`; enqueue failure → status reverted to `draft`; null `upload_id` skips `completeMultipartUpload`; non-`draft` → `VideoNotUploadableException` | `src/videos/videos.service.spec.ts` |
-| `VideosService.completeUpload` | Integration (real DB + MinIO + Redis): parts uploaded through presigned URLs and completed out of order → row `processing` with `file_size` set, `upload_id` null, object present, one `process-video` job for the video | `src/videos/videos.service.integration-spec.ts` |
+| `VideosService.completeUpload` | Integration (real DB + MinIO + Redis, test config: 5 MiB parts, 12 MiB limit): parts uploaded through presigned URLs and completed out of order → row `processing` with `file_size` set, `upload_id` null, object present, one `process-video` job for the video; three 5 MiB parts (15 MiB) → `UploadSizeExceededException`, object removed, video `failed` | `src/videos/videos.service.integration-spec.ts` |
 
 **Dependencies:** SI-03.6 — owner lookup and part signing; SI-03.4 — `VideoProcessingProducer`
 
@@ -239,7 +242,7 @@ Deliver video upload and processing in `nestjs-project`: S3-compatible object st
 - `POST /videos/:publicId/upload/complete` with the ETags of all uploaded parts returns `202` with `{ "id": "<publicId>", "status": "processing" }`
 - After completion the `videos` row has `status = 'processing'`, `file_size` equal to the stored object size and `upload_id = null`, and one `process-video` job with payload `{ videoId }` exists in `video-processing`
 - Completing with an ETag that does not belong to an uploaded part returns `422` with `error: "INVALID_UPLOAD_PARTS"` and the video stays `draft`
-- When the assembled object exceeds 10737418240 bytes the endpoint returns `422` with `error: "UPLOAD_SIZE_EXCEEDED"`, the object is removed from storage and the video is `failed` with `failure_reason = 'UPLOAD_SIZE_EXCEEDED'`
+- When the assembled object exceeds `VIDEO_MAX_UPLOAD_BYTES` (10737418240 by default) the endpoint returns `422` with `error: "UPLOAD_SIZE_EXCEEDED"`, the object is removed from storage and the video is `failed` with `failure_reason = 'UPLOAD_SIZE_EXCEEDED'`
 - Calling complete again on a video already `processing` returns `409` with `error: "VIDEO_NOT_UPLOADABLE"` and no second job is created
 - A request without a `parts` array returns `400` with `error: "VALIDATION_ERROR"`
 
@@ -357,6 +360,8 @@ Deliver video upload and processing in `nestjs-project`: S3-compatible object st
 | `VideosService` (read/stream/download) | Unit (mock repositories/storage): non-owner → `VideoNotFoundException`; non-`ready` → `VideoNotReadyException`; `thumbnail_url` null without `thumbnail_key`; download passes the escaped original file name | `src/videos/videos.service.spec.ts` |
 | `VideosService` (stream/download URLs) | Integration (real DB + MinIO): for a `ready` video with an object at `storage_key`, the stream URL answers a `Range: bytes=0-1023` request with `206` and 1024 bytes; the download URL answers with `Content-Disposition: attachment; filename="<original_file_name>"` | `src/videos/videos.service.integration-spec.ts` |
 
+_Test setup note (applies to these suites and to the E2E spec authored by `/plan-test-specs` for this SI):_ `ready` videos are seeded directly — the row is saved through the `Video` repository with `status = 'ready'` and a few KiB of arbitrary bytes are written at its `storage_key` with `StorageService.putObject`. No worker, queue or FFmpeg is involved: Range/`206` and `Content-Disposition` do not depend on valid media, and the E2E suites run in `nestjs-api`, which has no FFmpeg.
+
 **Dependencies:** SI-03.5 — `VideosService`/`VideosController`; SI-03.2 — presigned GET support
 
 **Acceptance criteria:**
@@ -376,7 +381,7 @@ Deliver video upload and processing in `nestjs-project`: S3-compatible object st
 **Technical actions:**
 
 1. Regenerate `nestjs-project/openapi.json` with `npm run openapi:export` (per `openapi-docs-nestjs/TD-02`) so it contains the eight `/videos` operations under the `videos` tag, each with its success schema and `ApiErrorEnvelope` error responses (per `openapi-docs-nestjs/TD-01` revision).
-2. Update `nestjs-project/CLAUDE.md` with a **Videos** section describing what exists in code: the `videos`, `storage`, `media` and `worker` modules; the eight endpoints and the upload → complete → process → stream/download flow; the `video-processing` queue and `process-video` job; the new Compose services (`minio`, `minio-init`, `redis`, `video-worker`) and their readiness checks; the new env keys (including why `S3_PUBLIC_ENDPOINT` is the only host-facing value); and that FFmpeg-dependent tests run inside `video-worker` (the API image has no FFmpeg).
+2. Update `nestjs-project/CLAUDE.md` with a **Videos** section describing what exists in code: the `videos`, `storage`, `media` and `worker` modules; the eight endpoints and the upload → complete → process → stream/download flow; the `video-processing` queue and `process-video` job; the new Compose services (`minio`, `minio-init`, `redis`, `video-worker`) and their readiness checks; the new env keys (including why `S3_PUBLIC_ENDPOINT` is the only host-facing value); that FFmpeg-dependent tests run inside `video-worker` (the API image has no FFmpeg); and the test-isolation caveats — tests share the development database with the running API and worker, so `cleanAllTables` also wipes development data, while queue isolation comes from `QUEUE_PREFIX=test` (the running worker only consumes the default prefix); and that the video endpoints are exempt from the auth rate limit (`@SkipThrottle()`).
 3. Update the root `CLAUDE.md` § Architecture so the Message Queue and Object Storage entries name the chosen technologies (BullMQ + Redis; MinIO via `pgsty/silo`, S3 API) instead of "TBD"/"S3/MinIO".
 
 **Tests:**
@@ -444,7 +449,7 @@ Single private bucket (name from `S3_BUCKET`) *(per phase-03-videos/TD-01, TD-08
 
 ### API Contracts
 
-All endpoints below are authenticated (`Authorization: Bearer <access_token>`, global JWT guard from Phase 02) and owner-scoped (see Authorization Matrix). `:publicId` is `videos.public_id` *(per phase-03-videos/TD-09)*. Error bodies follow the inherited envelope `{ statusCode, error, message }` *(per phase-02-auth/TD-07)*. Video bytes never transit these endpoints: upload parts go client → storage and playback/download go storage → client via presigned URLs *(per phase-03-videos/TD-03, TD-08)*.
+All endpoints below are authenticated (`Authorization: Bearer <access_token>`, global JWT guard from Phase 02) and owner-scoped (see Authorization Matrix). `:publicId` is `videos.public_id` *(per phase-03-videos/TD-09)*. Error bodies follow the inherited envelope `{ statusCode, error, message }` *(per phase-02-auth/TD-07)*. Video bytes never transit these endpoints: upload parts go client → storage and playback/download go storage → client via presigned URLs *(per phase-03-videos/TD-03, TD-08)*. The video endpoints are exempt from the Phase 02 auth rate limit (`@SkipThrottle()` on the controller): the `ThrottlerGuard` registered as `APP_GUARD` in `AuthModule` applies application-wide (10 requests/60 s), which would reject multi-round part signing and status polling with `429`, while `phase-02-auth/TD-08` intends the limit for the auth surface.
 
 #### POST /videos (SI-03.5)
 
@@ -464,8 +469,8 @@ Pre-registers the video as `draft` and opens the S3 multipart upload *(per phase
 - id: string (the 11-char `public_id`)
 - title: string
 - status: `"draft"`
-- part_size: integer — bytes per part (104857600 = 100 MiB; every part except the last must have exactly this size)
-- part_count: integer — `ceil(file_size / part_size)` (≤ 103 for 10 GiB; S3 limit is 10,000 parts, minimum part size 5 MiB)
+- part_size: integer — bytes per part, from `VIDEO_UPLOAD_PART_SIZE_BYTES` (default 104857600 = 100 MiB; minimum 5 MiB); every part except the last must have exactly this size
+- part_count: integer — `ceil(file_size / part_size)` (103 for a 10 GiB file at the default part size; S3 limit is 10,000 parts)
 
 **Error responses:**
 - 400 VALIDATION_ERROR: when the body fails validation (missing field, `file_size` > 10 GiB, unsupported `mime_type`)
@@ -532,7 +537,7 @@ Completes the multipart upload, verifies the actual size, moves the video to `pr
 - 404 VIDEO_NOT_FOUND: when no video with `:publicId` exists or the caller does not own it
 - 409 VIDEO_NOT_UPLOADABLE: when the video is not `draft`
 - 422 INVALID_UPLOAD_PARTS: when storage rejects the completion (missing/invalid part, wrong ETag, part smaller than 5 MiB other than the last)
-- 422 UPLOAD_SIZE_EXCEEDED: when the assembled object is larger than 10 GiB — the object is deleted and the video is marked `failed` *(per phase-03-videos/TD-11)*
+- 422 UPLOAD_SIZE_EXCEEDED: when the assembled object is larger than `VIDEO_MAX_UPLOAD_BYTES` (default 10737418240 = 10 GiB; never configurable above that) — the object is deleted and the video is marked `failed` *(per phase-03-videos/TD-11)*
 - 400 VALIDATION_ERROR: when `parts` is missing, empty or malformed
 - 401: when the access token is missing or invalid
 
@@ -655,7 +660,7 @@ Presigned URLs themselves carry no JWT: possession of an unexpired URL grants ac
 | VIDEO_NOT_FOUND | 404 | Video not found | Any `/videos/:publicId…` endpoint when the `public_id` does not exist or the video belongs to another channel |
 | VIDEO_NOT_UPLOADABLE | 409 | Video is not accepting uploads | Upload endpoints (`upload/parts`, `upload/complete`, `DELETE upload`) when `status != 'draft'`, or `upload/parts` when `upload_id` is null |
 | INVALID_UPLOAD_PARTS | 422 | Upload parts are invalid or incomplete | `POST …/upload/complete` when storage rejects `CompleteMultipartUpload` (`InvalidPart`, `InvalidPartOrder`, `EntityTooSmall`, `NoSuchUpload`) |
-| UPLOAD_SIZE_EXCEEDED | 422 | Uploaded file exceeds the 10 GiB limit | `POST …/upload/complete` when `HeadObject.ContentLength > 10737418240` *(per phase-03-videos/TD-11)* |
+| UPLOAD_SIZE_EXCEEDED | 422 | Uploaded file exceeds the maximum upload size | `POST …/upload/complete` when `HeadObject.ContentLength > VIDEO_MAX_UPLOAD_BYTES` (default 10737418240) *(per phase-03-videos/TD-11)* |
 | VIDEO_NOT_READY | 409 | Video is not ready | `GET …/stream` or `GET …/download` when `status != 'ready'` |
 | VALIDATION_ERROR | 400 | (array of field errors) | Inherited — any request body/param failing `ValidationPipe`; also thrown by the service (`InvalidPartNumbersException`, same code) when a `part_numbers` value exceeds the video's `part_count` |
 
@@ -663,7 +668,7 @@ Presigned URLs themselves carry no JWT: possession of an unexpired URL grants ac
 
 | failure_reason | Set by | Trigger |
 |----------------|--------|---------|
-| UPLOAD_SIZE_EXCEEDED | API (complete) | Assembled object larger than 10 GiB *(TD-11)* |
+| UPLOAD_SIZE_EXCEEDED | API (complete) | Assembled object larger than `VIDEO_MAX_UPLOAD_BYTES` (default 10 GiB) *(TD-11)* |
 | UNSUPPORTED_MEDIA | Worker | ffprobe fails to read the file, or container/codecs are outside the accepted set (MP4 = H.264 video + AAC audio; WebM = VP8/VP9/AV1 video + Vorbis/Opus audio; audio stream optional) *(TD-07)* — non-retriable (`UnrecoverableError`) |
 | PROCESSING_FAILED | Worker | Transient error (storage, DB, FFmpeg timeout) persisted after the last retry attempt *(TD-10)* |
 
