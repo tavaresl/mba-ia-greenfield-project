@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 5/12 completed
+**SIs:** 6/12 completed
 
 ### SI-03.1 — Infra: Storage and Queue Services, Dependencies, and Configuration Namespaces
 - **Status:** completed
@@ -54,9 +54,14 @@
   - e2e `afterEach` aborts open multipart uploads and removes `videos/` objects so MinIO does not accumulate parts across runs.
 
 ### SI-03.6 — Endpoints for Part Signing, Resume Listing, and Upload Cancellation
-- **Status:** pending
-- **Tests:** pending
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 20 passing in the SI's files (10 `VideosService` unit incl. ownership/sign/list/cancel, 4 integration, 6 e2e from `videos-upload-parts.plan.md`); regression 193 unit/integration + 65 e2e passing (2 consecutive full runs of each); `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors)
+- **Observations:**
+  - `part_count` is not persisted: it is derived from `declared_size` and the *current* `VIDEO_UPLOAD_PART_SIZE_BYTES` each time parts are signed. Changing that env var while an upload is in flight would shift the allowed range; acceptable for this phase, but persisting the part size on the row would remove the coupling if it ever matters.
+  - Ownership is a single query (`public_id` + `channel.user_id`), so a stranger's video and a non-existent id are indistinguishable (`404 VIDEO_NOT_FOUND`). Check order is 404 → 409 (`VIDEO_NOT_UPLOADABLE`) → 400 (part number above `part_count`).
+  - supertest pitfall in the e2e spec: building several requests up front and awaiting them later fails with `ECONNREFUSED` (the first completed request closes the shared ephemeral server). The spec creates each request lazily; worth remembering for the next e2e specs.
+  - `cancelUpload` propagates storage errors from `abortMultipartUpload` (including `NoSuchUpload`) without deleting the row; a retry after a partial failure is therefore not idempotent for an already-aborted upload. Not covered by the plan; left as is.
+  - Response DTOs live in `dto/upload-parts-response.dto.ts` (`*.dto.ts` so the Swagger CLI plugin infers them); `openapi.json` is regenerated in SI-03.12.
 
 ### SI-03.7 — Endpoint POST /videos/:publicId/upload/complete (Completion, Size Check, and Enqueue)
 - **Status:** pending

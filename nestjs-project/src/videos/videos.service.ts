@@ -5,10 +5,20 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Channel } from '../channels/entities/channel.entity';
 import { isPgUniqueViolationOnColumn } from '../common/database/pg-errors';
+import {
+  InvalidPartNumbersException,
+  VideoNotFoundException,
+  VideoNotUploadableException,
+} from '../common/exceptions/domain.exception';
+import storageConfig from '../config/storage.config';
 import videosConfig from '../config/videos.config';
 import { StorageService } from '../storage/storage.service';
 import type { CreateVideoDto } from './dto/create-video.dto';
 import type { CreateVideoResponseDto } from './dto/create-video-response.dto';
+import type {
+  SignedPartsResponseDto,
+  UploadedPartsResponseDto,
+} from './dto/upload-parts-response.dto';
 import { Video, VideoStatus } from './entities/video.entity';
 import { generatePublicId } from './public-id.util';
 import {
@@ -26,6 +36,8 @@ export class VideosService {
     private readonly storage: StorageService,
     @Inject(videosConfig.KEY)
     private readonly config: ConfigType<typeof videosConfig>,
+    @Inject(storageConfig.KEY)
+    private readonly storageSettings: ConfigType<typeof storageConfig>,
   ) {}
 
   async createDraft(
@@ -66,6 +78,88 @@ export class VideosService {
       part_size: partSize,
       part_count: Math.ceil(dto.file_size / partSize),
     };
+  }
+
+  async signUploadParts(
+    userId: string,
+    publicId: string,
+    partNumbers: number[],
+  ): Promise<SignedPartsResponseDto> {
+    const video = this.requireOpenUpload(
+      await this.findOwnedOrFail(userId, publicId),
+    );
+    const partCount = this.partCountOf(video);
+    if (partNumbers.some((number) => number > partCount)) {
+      throw new InvalidPartNumbersException();
+    }
+
+    const expiresIn = this.storageSettings.uploadUrlTtlSeconds;
+    const parts = await Promise.all(
+      partNumbers.map(async (partNumber) => ({
+        part_number: partNumber,
+        url: await this.storage.presignUploadPart(
+          video.storage_key,
+          video.upload_id!,
+          partNumber,
+          expiresIn,
+        ),
+      })),
+    );
+    return { parts, expires_in: expiresIn };
+  }
+
+  async listUploadedParts(
+    userId: string,
+    publicId: string,
+  ): Promise<UploadedPartsResponseDto> {
+    const video = this.requireOpenUpload(
+      await this.findOwnedOrFail(userId, publicId),
+    );
+    const parts = await this.storage.listParts(
+      video.storage_key,
+      video.upload_id!,
+    );
+    return {
+      parts: parts.map(({ partNumber, etag, size }) => ({
+        part_number: partNumber,
+        etag,
+        size,
+      })),
+    };
+  }
+
+  async cancelUpload(userId: string, publicId: string): Promise<void> {
+    const video = await this.findOwnedOrFail(userId, publicId);
+    if (video.status !== VideoStatus.DRAFT) {
+      throw new VideoNotUploadableException();
+    }
+    if (video.upload_id) {
+      await this.storage.abortMultipartUpload(
+        video.storage_key,
+        video.upload_id,
+      );
+    }
+    await this.videos.delete({ id: video.id });
+  }
+
+  // Non-owners and unknown ids look the same, so other channels' videos are not revealed.
+  async findOwnedOrFail(userId: string, publicId: string): Promise<Video> {
+    const video = await this.videos.findOne({
+      where: { public_id: publicId, channel: { user_id: userId } },
+    });
+    if (!video) throw new VideoNotFoundException();
+    return video;
+  }
+
+  private requireOpenUpload(video: Video): Video {
+    if (video.status !== VideoStatus.DRAFT || !video.upload_id) {
+      throw new VideoNotUploadableException();
+    }
+    return video;
+  }
+
+  private partCountOf(video: Video): number {
+    return Math.ceil(video.declared_size / this.config.uploadPartSizeBytes);
   }
 
   // The unique index on public_id is the real guarantee; retry on the rare clash.

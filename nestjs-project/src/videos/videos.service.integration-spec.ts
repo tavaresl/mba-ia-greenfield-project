@@ -14,6 +14,11 @@ import {
   createTestDataSource,
 } from '../test/create-test-data-source';
 import { User } from '../users/entities/user.entity';
+import { randomBytes } from 'crypto';
+import {
+  VideoNotFoundException,
+  VideoNotUploadableException,
+} from '../common/exceptions/domain.exception';
 import { Video, VideoStatus } from './entities/video.entity';
 import { VideosService } from './videos.service';
 
@@ -115,5 +120,82 @@ describe('VideosService (integration)', () => {
     await expect(
       storage.listParts(row.storage_key, row.upload_id!),
     ).resolves.toEqual([]);
+  });
+
+  describe('upload parts and cancellation', () => {
+    async function createOwnedDraft(fileSize = 11534336) {
+      const created = await service.createDraft(userId, {
+        title: 'Resumable',
+        file_name: 'clip.mp4',
+        file_size: fileSize,
+        mime_type: 'video/mp4',
+      });
+      const row = await dataSource
+        .getRepository(Video)
+        .findOneByOrFail({ public_id: created.id });
+      uploadsToAbort.push({ key: row.storage_key, uploadId: row.upload_id! });
+      return row;
+    }
+
+    it('should sign a part URL that accepts a PUT and list the part afterwards', async () => {
+      const row = await createOwnedDraft();
+
+      const signed = await service.signUploadParts(userId, row.public_id, [1]);
+      const response = await fetch(signed.parts[0].url, {
+        method: 'PUT',
+        body: new Uint8Array(randomBytes(5242880)),
+      });
+      const listed = await service.listUploadedParts(userId, row.public_id);
+
+      expect(response.status).toBe(200);
+      expect(listed.parts).toEqual([
+        {
+          part_number: 1,
+          etag: response.headers.get('etag'),
+          size: 5242880,
+        },
+      ]);
+    });
+
+    it('should hide the video from another user', async () => {
+      const row = await createOwnedDraft();
+      const stranger = await dataSource.getRepository(User).save({
+        email: 'stranger@example.com',
+        password: 'hashed',
+      });
+      await dataSource.getRepository(Channel).save({
+        name: 'Stranger',
+        nickname: 'stranger',
+        user_id: stranger.id,
+      });
+
+      await expect(
+        service.listUploadedParts(stranger.id, row.public_id),
+      ).rejects.toBeInstanceOf(VideoNotFoundException);
+    });
+
+    it('should abort the multipart upload and delete the row on cancel', async () => {
+      const row = await createOwnedDraft();
+
+      await service.cancelUpload(userId, row.public_id);
+
+      await expect(
+        dataSource.getRepository(Video).findOneBy({ id: row.id }),
+      ).resolves.toBeNull();
+      await expect(
+        storage.listParts(row.storage_key, row.upload_id!),
+      ).rejects.toMatchObject({ name: 'NoSuchUpload' });
+    });
+
+    it('should refuse to cancel a video that is no longer a draft', async () => {
+      const row = await createOwnedDraft();
+      await dataSource
+        .getRepository(Video)
+        .update({ id: row.id }, { status: VideoStatus.PROCESSING });
+
+      await expect(
+        service.cancelUpload(userId, row.public_id),
+      ).rejects.toBeInstanceOf(VideoNotUploadableException);
+    });
   });
 });
