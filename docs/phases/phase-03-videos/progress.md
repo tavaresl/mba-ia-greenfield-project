@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 7/12 completed
+**SIs:** 8/12 completed
 
 ### SI-03.1 — Infra: Storage and Queue Services, Dependencies, and Configuration Namespaces
 - **Status:** completed
@@ -73,9 +73,15 @@
   - The DTO caps `parts` at 10,000 items (S3 maximum); `part_number` is validated 1–10,000.
 
 ### SI-03.8 — Infra: Video Worker Image, Entrypoint, and Compose Service
-- **Status:** pending
-- **Tests:** pending
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 1 passing (`worker.module.spec.ts`); e2e regression with the extracted shared options (`app.e2e-spec.ts` and the video specs); full regression 204 unit/integration + 70 e2e passing (2 consecutive full runs of each); `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors). Acceptance criteria verified manually against the running stack (see below)
+- **Observations:**
+  - Verified live: `video-worker` is `running` with 0 restarts after `docker compose up -d --build video-worker`; `ffprobe -version` works in `video-worker` (Debian 12 package, ffmpeg/ffprobe 5.1.9) and fails with "executable file not found" in `nestjs-api`; the Node process binds no port (the only listening socket in either container is Docker's embedded DNS at 127.0.0.11); log shows `Video worker started (no HTTP listener)`.
+  - Dual watchers: `nest start --watch -p tsconfig.worker.json --entryFile worker` compiles to `dist-worker/`, while the API compiles to `dist/`; both were run at the same time without either clearing the other's output (`deleteOutDir` is per outDir). `dist-worker` is gitignored and excluded from `tsconfig.build.json`.
+  - **Environment finding:** with the Colima bind mount, file-change events do not reach other containers (and edits made on the host reach neither watcher), so the worker never rebuilt on edits. Fixed for the worker only with `TSC_WATCHFILE=PriorityPollingInterval` and `TSC_WATCHDIRECTORY=RecursiveDirectoryUsingDynamicPriorityPolling` in its Compose service; two host edits then triggered two rebuilds (worker PIDs 33 -> 47 -> 61, no crash). The `nestjs-api` service was left unchanged and still has the same limitation for host edits (pre-existing; follow-up).
+  - `WorkerModule` already registers the `video-processing` queue (the plan lists that under SI-03.10). It is needed now: with no Redis connection the application context has nothing keeping the event loop alive and the container would exit and restart in a loop; SI-03.10 only has to add the processor.
+  - Shared bootstrap options extracted as planned: `src/config/config-module.options.ts`, `src/database/typeorm.options.ts`, `src/queue/bull.options.ts`; `AppModule` now only composes them. The specs from SI-03.4/03.5 still declare their own Bull options inline (left untouched).
+  - `start:worker` (`node dist/worker`) assumes `nest build` output in `dist/`; `start:worker:dev` is the one used by Compose.
 
 ### SI-03.9 — Media Module: Typed ffprobe/ffmpeg Wrapper and Accepted-Format Policy
 - **Status:** pending

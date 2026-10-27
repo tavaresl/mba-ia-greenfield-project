@@ -37,6 +37,27 @@ services:
       - "1025:1025"
       - "8025:8025"
 
+  video-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker.dev
+    command: npm run start:worker:dev
+    restart: unless-stopped
+    environment:
+      # Bind-mounted files do not emit inotify events across containers (or
+      # from the host) here, so make the TypeScript watcher poll.
+      - TSC_WATCHFILE=PriorityPollingInterval
+      - TSC_WATCHDIRECTORY=RecursiveDirectoryUsingDynamicPriorityPolling
+    volumes:
+      - .:/home/node/app
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+
   minio:
     image: pgsty/silo:RELEASE.2026-10-18T00-00-00Z
     command: server /data --console-address ":9001"
