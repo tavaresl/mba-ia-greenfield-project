@@ -1,0 +1,134 @@
+# phase-03-videos — Progress
+
+**Status:** completed
+**SIs:** 12/12 completed
+
+### SI-03.1 — Infra: Storage and Queue Services, Dependencies, and Configuration Namespaces
+- **Status:** completed
+- **Tests:** 9 passing in `env.validation.integration-spec.ts`; regression 149 unit/integration + 52 e2e passing; `tsc --noEmit` exit 0
+- **Observations:**
+  - Pre-requisite fix committed before this SI (`507c8c9`): `migrations.integration-spec.ts` did not drop the leftover `verification_tokens_type_enum`, so the baseline was 143/144. Later SIs that add enums must drop them in the same `beforeAll`.
+  - Jest must run with `--forceExit` here (open handles keep the process alive); `package.json` scripts were not changed.
+  - `npm run lint` already fails on the baseline (150 errors before this SI, mostly `no-unsafe-*` in existing specs); this SI added no new lint errors. Needs a decision before the Definition of Done can pass.
+  - `.env.example` has an unquoted `MAIL_FROM` that breaks Docker Compose parsing on a fresh clone (pre-existing, out of scope; local `.env` was quoted).
+  - `.env` (gitignored) was extended with the new keys; `S3_ACCESS_KEY`/`S3_SECRET_KEY` defaults in `.env.example` are development-only values.
+
+### SI-03.2 — Storage Module (S3 Clients, Multipart and Presigned Operations)
+- **Status:** completed
+- **Tests:** 9 passing (8 integration against real MinIO + 1 module compilation); regression 158 unit/integration + 52 e2e passing; `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors)
+- **Observations:**
+  - `StorageModule` exports `StorageService` and the internal S3 client token (`S3_INTERNAL_CLIENT`); the signing client stays private to the module. The test cleanup helper `src/test/storage.ts` takes the internal client.
+  - Beyond the plan's list, the integration spec also covers `deleteObject` and `listParts` after `abortMultipartUpload` (`NoSuchUpload`), and checks presigned URL origins with a config override (public vs internal endpoint).
+  - `ts-jest` did not flag a `Buffer` passed as `fetch` body, but `tsc --noEmit` did (fixed in the spec with `new Uint8Array(body)`); keep running `tsc` after specs.
+  - Presigned `UploadPart` PUTs worked against `pgsty/silo` with `requestChecksumCalculation: 'WHEN_REQUIRED'`, as the library-refs caution anticipated.
+
+### SI-03.3 — Video Entity, CreateVideos Migration, and Public ID Generator
+- **Status:** completed
+- **Tests:** 12 passing in the SI's files (6 entity integration, 2 `generatePublicId` unit, 4 migrations integration); regression 168 unit/integration + 52 e2e passing; `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors)
+- **Observations:**
+  - Migration generated with `npm run migration:generate` against the dev DB *before* any test created the `videos` table, so the diff is exact: `1793065595069-CreateVideos.ts` (enum, table, unique `public_id` index, `channel_id` index, FK; `down` in reverse order). Verified via the CLI: `migration:revert` removes the table and `videos_status_enum`, `migration:run` restores them.
+  - `migrations.integration-spec.ts` now covers 3 migrations / 5 tables, enum + unique index + FK existence, and reverts `CreateVideos` and `CreateAuthTokens` in separate tests. It drops `videos_status_enum` alongside `verification_tokens_type_enum` (as anticipated in SI-03.1 observations).
+  - Flaky deadlock fixed: the spec's `beforeAll` ran the `DROP TABLE ... CASCADE` statements in parallel (`Promise.all`) on different pool connections; with the new `videos -> channels` FK this deadlocked intermittently (1 of ~4 full runs), and the failed `afterAll` cascaded into ~30 failures in other suites. Drops are now sequential; 12 consecutive runs of the affected suites and 2 full runs passed afterwards.
+  - `cleanAllTables` deletes from `videos` first (FK order).
+  - Pre-existing lint error `no-unsafe-function-type` in `src/test/create-test-data-source.ts` left untouched (baseline debt).
+
+### SI-03.4 — Processing Queue Registration, Producer, and VideosModule
+- **Status:** completed
+- **Tests:** 4 passing in the SI's files (3 producer integration against real Redis + 1 module compilation); regression 172 unit/integration + 52 e2e passing (2 consecutive full runs); `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors)
+- **Observations:**
+  - **Undocumented dependency:** `bullmq@6` no longer bundles `ioredis` (optional peer, `>=5`); without it, queue creation fails with "BullMQ could not load the optional 'ioredis' package". Installed `ioredis@^5.11.1` (the registry `latest` is 6.0.0, which neither the plan nor `@nestjs/bullmq@11` was validated against). `library-refs.md` does not mention this; the worker (SI-03.8/03.10) reuses the same install.
+  - The `BullModule.forRootAsync` options currently live inline in `AppModule` and are repeated in the two specs; SI-03.8 extracts them into a shared `bull.options.ts` per the plan.
+  - Producer applies the job options explicitly on each `add` (`PROCESS_VIDEO_JOB_OPTIONS` + `jobId = videoId`) instead of `defaultJobOptions` on the queue, so the contract is visible at the call site and asserted by the integration spec.
+  - `removeOnComplete: true` means de-duplication by `jobId` only holds while the job exists; a re-enqueue after completion creates a new job (the processor must stay idempotent, as planned in TD-10).
+  - Test isolation: `QUEUE_PREFIX=test` is applied by `setup-test-env.ts`; the spec obliterates its queue before each test. A `test:video-processing:meta` key remains in Redis after e2e runs (harmless).
+
+### SI-03.5 — Endpoint POST /videos (Draft Pre-registration and Upload Initiation)
+- **Status:** completed
+- **Tests:** 12 passing in the SI's files (5 `VideosService` unit, 2 `VideosService` integration, 7 e2e from `videos-create.plan.md`); regression 179 unit/integration + 59 e2e passing (2 consecutive full runs of each); `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors)
+- **Observations:**
+  - All six Phase 03 domain exceptions from the Error Catalog were added now (only `VALIDATION_ERROR`-style input errors are used by this SI); later SIs consume the rest.
+  - Added `src/videos/videos.constants.ts` (MIME types, extensions, 10 GiB DTO limit, 100/255 length limits, 5 public-id attempts) and `src/common/database/pg-errors.ts` (`isPgUniqueViolationOnColumn`). `ChannelsService` still has its own private copy of that helper; deduplicating it is a refactor outside this SI (follow-up).
+  - Shared e2e helper `src/test/e2e-auth.ts` (`registerConfirmAndLogin`) mirrors the helper inside `auth.e2e-spec.ts` so the next video e2e specs do not repeat it; `auth.e2e-spec.ts` was left untouched.
+  - The DTO limit (10 GiB) is fixed in the contract; `VIDEO_MAX_UPLOAD_BYTES` can only lower the enforced limit at `complete` (SI-03.7). With the test env (5 MiB parts) the e2e asserts `part_count = ceil(file_size / part_size)` for 10 GiB; the exact 103 at the default 100 MiB part size is asserted in the unit spec, which injects production defaults instead of the test env values.
+  - The Swagger CLI plugin picks up `*.dto.ts`; the new `CreateVideoResponseDto` lives in `dto/create-video-response.dto.ts` for that reason. `src/metadata.ts` / `openapi.json` are regenerated in SI-03.12.
+  - e2e `afterEach` aborts open multipart uploads and removes `videos/` objects so MinIO does not accumulate parts across runs.
+
+### SI-03.6 — Endpoints for Part Signing, Resume Listing, and Upload Cancellation
+- **Status:** completed
+- **Tests:** 20 passing in the SI's files (10 `VideosService` unit incl. ownership/sign/list/cancel, 4 integration, 6 e2e from `videos-upload-parts.plan.md`); regression 193 unit/integration + 65 e2e passing (2 consecutive full runs of each); `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors)
+- **Observations:**
+  - `part_count` is not persisted: it is derived from `declared_size` and the *current* `VIDEO_UPLOAD_PART_SIZE_BYTES` each time parts are signed. Changing that env var while an upload is in flight would shift the allowed range; acceptable for this phase, but persisting the part size on the row would remove the coupling if it ever matters.
+  - Ownership is a single query (`public_id` + `channel.user_id`), so a stranger's video and a non-existent id are indistinguishable (`404 VIDEO_NOT_FOUND`). Check order is 404 → 409 (`VIDEO_NOT_UPLOADABLE`) → 400 (part number above `part_count`).
+  - supertest pitfall in the e2e spec: building several requests up front and awaiting them later fails with `ECONNREFUSED` (the first completed request closes the shared ephemeral server). The spec creates each request lazily; worth remembering for the next e2e specs.
+  - `cancelUpload` propagates storage errors from `abortMultipartUpload` (including `NoSuchUpload`) without deleting the row; a retry after a partial failure is therefore not idempotent for an already-aborted upload. Not covered by the plan; left as is.
+  - Response DTOs live in `dto/upload-parts-response.dto.ts` (`*.dto.ts` so the Swagger CLI plugin infers them); `openapi.json` is regenerated in SI-03.12.
+
+### SI-03.7 — Endpoint POST /videos/:publicId/upload/complete (Completion, Size Check, and Enqueue)
+- **Status:** completed
+- **Tests:** 15 passing in the SI's files (8 `completeUpload` unit, 2 integration against real DB + MinIO + Redis, 5 e2e from `videos-upload-complete.plan.md`); regression 203 unit/integration + 70 e2e passing (2 consecutive full runs of each); `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors)
+- **Observations:**
+  - Sequence in `completeUpload`: owner check → `draft` check → `CompleteMultipartUpload` (parts sorted/de-duplicated in `StorageService`) → clear `upload_id` → `HeadObject` size check against `VIDEO_MAX_UPLOAD_BYTES` → conditional `draft → processing` (`WHERE status = 'draft'`, 0 affected → `VIDEO_NOT_UPLOADABLE`) → enqueue; on enqueue failure the status is reverted to `draft` and the error rethrown. Clearing `upload_id` before the size check lets a retry skip re-assembly.
+  - Known gaps, not covered by the plan: (1) if the process dies between the `processing` update and the enqueue, the video stays `processing` with no job (TD-04 flagged the non-atomic enqueue; the revert only covers a thrown error); (2) on an oversize file the object is deleted but a failure of the following `failed` update would leave the row `draft` without an object, and a retry would fail at `HeadObject`; (3) two concurrent `complete` calls: the second fails at `CompleteMultipartUpload` with `INVALID_UPLOAD_PARTS` rather than `VIDEO_NOT_UPLOADABLE`.
+  - The integration spec now boots the real `VideosModule` (with `BullModule.forRootAsync`, Redis and `QUEUE_PREFIX=test`) instead of listing providers by hand, and obliterates the test queue before each test; the e2e spec does the same via `AppModule`.
+  - The DTO caps `parts` at 10,000 items (S3 maximum); `part_number` is validated 1–10,000.
+
+### SI-03.8 — Infra: Video Worker Image, Entrypoint, and Compose Service
+- **Status:** completed
+- **Tests:** 1 passing (`worker.module.spec.ts`); e2e regression with the extracted shared options (`app.e2e-spec.ts` and the video specs); full regression 204 unit/integration + 70 e2e passing (2 consecutive full runs of each); `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors). Acceptance criteria verified manually against the running stack (see below)
+- **Observations:**
+  - Verified live: `video-worker` is `running` with 0 restarts after `docker compose up -d --build video-worker`; `ffprobe -version` works in `video-worker` (Debian 12 package, ffmpeg/ffprobe 5.1.9) and fails with "executable file not found" in `nestjs-api`; the Node process binds no port (the only listening socket in either container is Docker's embedded DNS at 127.0.0.11); log shows `Video worker started (no HTTP listener)`.
+  - Dual watchers: `nest start --watch -p tsconfig.worker.json --entryFile worker` compiles to `dist-worker/`, while the API compiles to `dist/`; both were run at the same time without either clearing the other's output (`deleteOutDir` is per outDir). `dist-worker` is gitignored and excluded from `tsconfig.build.json`.
+  - **Environment finding:** with the Colima bind mount, file-change events do not reach other containers (and edits made on the host reach neither watcher), so the worker never rebuilt on edits. Fixed for the worker only with `TSC_WATCHFILE=PriorityPollingInterval` and `TSC_WATCHDIRECTORY=RecursiveDirectoryUsingDynamicPriorityPolling` in its Compose service; two host edits then triggered two rebuilds (worker PIDs 33 -> 47 -> 61, no crash). The `nestjs-api` service was left unchanged and still has the same limitation for host edits (pre-existing; follow-up).
+  - `WorkerModule` already registers the `video-processing` queue (the plan lists that under SI-03.10). It is needed now: with no Redis connection the application context has nothing keeping the event loop alive and the container would exit and restart in a loop; SI-03.10 only has to add the processor.
+  - Shared bootstrap options extracted as planned: `src/config/config-module.options.ts`, `src/database/typeorm.options.ts`, `src/queue/bull.options.ts`; `AppModule` now only composes them. The specs from SI-03.4/03.5 still declare their own Bull options inline (left untouched).
+  - `start:worker` (`node dist/worker`) assumes `nest build` output in `dist/`; `start:worker:dev` is the one used by Compose.
+
+### SI-03.9 — Media Module: Typed ffprobe/ffmpeg Wrapper and Accepted-Format Policy
+- **Status:** completed
+- **Tests:** 21 passing (9 `FfmpegService` integration against the real ffmpeg/ffprobe binaries, 12 `isSupportedMedia` unit cases); full unit/integration regression run inside `video-worker`: 225 passing, 34 suites (2 consecutive runs); e2e in `nestjs-api`: 70 passing (2 runs); `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors)
+- **Observations:**
+  - **Test environment change:** `ffmpeg.service.integration-spec.ts` needs the ffmpeg binaries, so it fails with `spawn ffmpeg ENOENT` in the `nestjs-api` image (confirmed). From this SI on, the unit/integration suite must run in `video-worker` (`docker compose exec video-worker npm test -- --runInBand --forceExit`); the e2e suite keeps running in `nestjs-api`. SI-03.12 must document this in `nestjs-project/CLAUDE.md`.
+  - Added `VIDEO_MEDIA_TIMEOUT_SECONDS` (Joi: integer >= 1, default 300; `videos.config.ts` exposes `mediaTimeoutMs`; `.env.example` updated) to make the wrapper timeout configurable as the plan asks; each call can also override it with `{ timeoutMs }`, which the spec uses.
+  - Timeout implementation: `spawn(..., { signal: AbortSignal.timeout(ms), killSignal: 'SIGKILL' })`; the spec triggers it against a local TCP server that accepts and never answers (also exercising the HTTP input path) and asserts the run is aborted well under 5 s.
+  - Error contract for SI-03.10: `MediaProbeError` = ffprobe exited non-zero, returned unparsable output, or the input has no video stream/duration (maps to `UNSUPPORTED_MEDIA`); `MediaProcessingError` = timeout, binary missing, or ffmpeg failure while extracting a frame (transient; maps to retry/`PROCESSING_FAILED`). `MediaProbe` fields are non-null except `audioCodec` and `bitrate`.
+  - `isSupportedMedia` requires the video codec to match the declared MIME type (`h264` for MP4; `vp8`/`vp9`/`av1` for WebM) and, when an audio stream exists, an accepted audio codec (`aac`; `vorbis`/`opus`). Audio-only and unknown MIME types are rejected.
+  - Fixtures (`src/test/media-fixtures.ts`) use `libx264`, `libvpx-vp9` (realtime/cpu-used 8 to stay fast), `libopus` and `mpeg4` from the Debian 12 ffmpeg 5.1.9 package; generation takes a few seconds per suite. Added a silent-MP4 fixture beyond the three in the plan to cover the optional-audio rule.
+  - Not exercised here: probing/extracting through a real presigned HTTP URL with a moov-at-end MP4 (needs HTTP Range); that path is covered when the processor runs against MinIO in SI-03.10.
+
+### SI-03.10 — Video Processor (Metadata, Thumbnail, Ready/Failed Transitions)
+- **Status:** completed
+- **Tests:** 19 passing in the SI's files (9 `VideoProcessor` unit, 9 integration with the real processor on a real BullMQ worker + DB + MinIO + FFmpeg, 1 `WorkerModule`); full unit/integration regression in `video-worker`: 243 passing, 36 suites (2 consecutive runs); e2e in `nestjs-api`: 70 passing (2 runs); `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors). Final criterion verified live (below)
+- **Observations:**
+  - **Live end-to-end check (final acceptance criterion):** with the API (`start:dev`) and the already-running `video-worker` up, a script on the host registered a user, confirmed via Mailpit, logged in, created a video, `PUT` a 51 KB H.264/AAC MP4 part directly to MinIO through the presigned URL and called `complete` (`202`). Without any further action the worker set the video `ready`: `duration_seconds=3`, `640x360`, `h264/aac`, `container_format=mov,mp4,m4a,3gp,3g2,mj2`, `bitrate=136781`, `file_size=51293`, and stored `videos/{id}/thumbnail.jpg` (9.5 KiB). The MP4 has its moov atom at the end, so this also confirms ffprobe/ffmpeg read from a presigned HTTP URL via Range (the gap noted in SI-03.9).
+  - **Bug found and fixed:** `WorkerModule` registered only `Video` with `forFeature`, but `Video -> Channel -> User` relations need all three in the connection metadata, so the real worker crashed with `Entity metadata for Video#channel was not found` as soon as the processor was added (the running container showed it after hot reload). The integration spec had not caught it because its own DataSource lists every entity; the `WorkerModule` spec did. It now registers `Video`, `Channel`, `User` and asserts the relation resolves. After the fix the container recovered by itself (0 restarts).
+  - Integration spec runs the real `VideoProcessor` on a real BullMQ Worker under `QUEUE_PREFIX=test` (the running worker only consumes the default prefix). It covers: valid MP4 and WebM -> `ready` with metadata and a JPEG thumbnail (content type and `FF D8` verified); `mpeg4` MP4 and a text file -> `failed/UNSUPPORTED_MEDIA` with `attemptsMade = 1`; a persistent transient error (probe stubbed) -> status stays `processing` on attempts 1-3 and ends `failed/PROCESSING_FAILED` with `attemptsMade = 3` (job added with a 50 ms fixed backoff instead of the producer's 5 s exponential one); re-delivery for `ready`/`failed` videos leaves the row (including `updated_at`) untouched.
+  - Failure mapping: `MediaProbeError` and unsupported codec combinations (internal `UnsupportedMediaError`) -> `UNSUPPORTED_MEDIA` + `UnrecoverableError`; everything else (including storage errors and `MediaProcessingError`) is retried and marked `PROCESSING_FAILED` only on the last attempt (`attemptsMade + 1 >= opts.attempts`, 1 when unset). Both transitions are conditional on `status = 'processing'`.
+  - Thumbnail frame at `min(1, duration / 2)` seconds; probe URL is signed with the internal client and expires in twice the media timeout.
+  - Gap carried over from SI-03.7: if the worker is down when a job is added the job simply waits in Redis (fine); but a video left `processing` without any job (process died between the DB update and the enqueue) is still never picked up. Not addressed by the plan.
+  - The live check left one user/video in the dev DB and objects in MinIO; the next test run's cleanup removes them.
+
+### SI-03.11 — Endpoints for Video Status, Streaming, and Download
+- **Status:** completed
+- **Tests:** 17 passing in the SI's files (8 unit, 4 integration against real DB + MinIO, 5 e2e from `videos-read-stream-download.plan.md`); full unit/integration regression in `video-worker`: 255 passing, 36 suites (2 runs); e2e in `nestjs-api`: 75 passing, 7 suites (2 runs); `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors)
+- **Observations:**
+  - `GET /videos/:publicId/stream` and `/download` use `@Redirect(undefined, 302)` and return `{ url }`; the e2e follows the `Location` with `fetch` against the real MinIO and checks `206` + `Content-Range: bytes 0-1023/4096` (1024 bytes) and `Content-Disposition: attachment; filename="my clip.mp4"`.
+  - Both URLs and `thumbnail_url` are signed with the **public** signer and `S3_DOWNLOAD_URL_TTL_SECONDS` (4 h by default). Anyone holding the URL can read that one object until it expires (as stated in the Authorization Matrix); the `Location` header therefore must not be logged by proxies in production.
+  - `ResponseContentDisposition` escapes `"` in the file name but does not encode non-ASCII characters: a name with accents or emoji would put non-Latin-1 characters in a header value. Not covered by the plan (a `filename*=UTF-8''...` form would be the fix); worth a follow-up before exposing downloads to the browser.
+  - `file_size`, durations and bitrate come from the entity transformer / double columns as numbers; `created_at`/`updated_at` are returned as ISO-8601 strings.
+  - The unit spec's second describe now mocks `presignGetObject`; the integration spec deletes the seeded `videos/{id}/original.mp4` objects in `afterEach` in addition to the global cleanup.
+
+### SI-03.12 — OpenAPI Artifact and AI Documentation for Videos
+- **Status:** completed
+- **Tests:** 10 new cases in `openapi-export.integration-spec.ts` (19 total passing: 8 operations tagged `videos` with `access-token` security, success status and the error statuses referencing `ApiErrorEnvelope`; request/response schemas); full unit/integration regression in `video-worker`: 265 passing, 36 suites (2 runs); e2e in `nestjs-api`: 75 passing, 7 suites (2 runs); `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors)
+- **Observations:**
+  - **Bug fixed before it shipped:** `VideosController` used `@ApiBearerAuth()` (default scheme name `bearer`), but the document only declares `access-token`; the videos operations would have pointed at a non-existent security scheme. Now `@ApiBearerAuth('access-token')`, and the export spec asserts it for all 8 operations.
+  - **Request schemas needed explicit `@ApiProperty`:** `npm run openapi:export` runs through `ts-node`, where the Swagger CLI plugin does not run, so DTOs without decorators export as `properties: {}` (this is how the existing auth DTOs appear in the committed `openapi.json`; pre-existing, matches the TD-01 revision). `CreateVideoDto`, `SignUploadPartsDto`, `CompleteUploadDto` and `CompletedPartDto` now carry explicit `@ApiProperty`, and the spec checks their properties. The auth DTOs were left untouched (follow-up).
+  - `openapi.json` diff is additive only (+890 lines, 0 removals; the 9 `/auth` paths unchanged). With `SWAGGER_ENABLED=true`, `GET /api/docs` answers 200 and `/api/docs-json` serves the same 8 `/videos` operations under the `videos` tag.
+  - Documentation: `nestjs-project/CLAUDE.md` gained readiness checks for Redis/MinIO, the new services, where each test suite runs (unit/integration in `video-worker`, e2e in `nestjs-api`, always with `--forceExit`), and a "Videos (Phase 03)" section (modules, 8 endpoints, flow, configuration incl. why `S3_PUBLIC_ENDPOINT` is the only host-facing value, worker/FFmpeg, test-isolation caveats, rate-limit exemption, OpenAPI). A script checked that every path, Compose service, env key, npm script, endpoint and code identifier it mentions exists in the repository (nothing missing).
+  - Root `CLAUDE.md`: Message Queue now names BullMQ on Redis, Object Storage names MinIO via `pgsty/silo` over the S3 API, Video Worker describes the separate container. Also fixed an older false statement there (`next-frontend/` "not yet initialized"), since the acceptance criteria fail a CLAUDE.md that contradicts the code.
+
+
+## Final verification
+
+- Infra up (`db`, `mailpit`, `minio`, `redis`, `nestjs-api`, `video-worker`); unit/integration in `video-worker`: 265 passing, 36 suites; e2e in `nestjs-api`: 75 passing, 7 suites; `npx tsc --noEmit` exit 0.
+- **`npm run lint` fails (190 problems, 150 errors, 40 warnings) — accepted as pre-existing debt** (decision: user). The same count existed on the baseline before this phase; the errors are mostly `@typescript-eslint/no-unsafe-*` in older specs, and none were introduced by Phase 03. The DoD item "lint passes" is therefore not met; fixing it (clean the specs or adjust the rule) is a separate scope for its own branch.
