@@ -3,7 +3,7 @@ kind: phase
 name: phase-03-videos
 sources_mtime:
   docs/project-plan.md: "2026-10-24T16:34:56-03:00"
-  docs/decisions/technical-decisions-phase-03-videos.md: "2026-10-26T20:34:52-03:00"
+  docs/decisions/technical-decisions-phase-03-videos.md: "2026-10-26T21:00:16-03:00"
   docs/decisions/technical-decisions-openapi-docs-nestjs.md: "2026-10-24T16:34:56-03:00"
   docs/phases/phase-01-configuracao-base/context.md: "2026-10-24T16:34:56-03:00"
   docs/phases/phase-02-auth/context.md: "2026-10-24T16:34:56-03:00"
@@ -50,18 +50,23 @@ sources_mtime:
 
 | Ref | Source | Scope | Topic | Status | Decision | Libraries |
 |-----|--------|-------|-------|--------|----------|-----------|
-| phase-03-videos/TD-01 | phase | Backend | Bucket & Object Key Organization | pending | — | — |
-| phase-03-videos/TD-02 | phase | Backend | S3 Client Library (API + Worker) | pending | — | — |
-| phase-03-videos/TD-03 | phase | Backend | Upload Strategy for Files up to 10GB | pending | — | — |
-| phase-03-videos/TD-04 | phase | Backend | Background Job Queue Technology | pending | — | — |
-| phase-03-videos/TD-05 | phase | Backend | Video Worker Topology | pending | — | — |
-| phase-03-videos/TD-06 | phase | Backend | FFmpeg / ffprobe Integration | pending | — | — |
-| phase-03-videos/TD-07 | phase | Backend | Processing Output & Streaming Format | pending | — | — |
-| phase-03-videos/TD-08 | phase | Backend | Streaming & Download Delivery Path | pending | — | — |
-| phase-03-videos/TD-09 | phase | Backend | Unique Short Video Identifier (public URL ID) | pending | — | — |
-| phase-03-videos/TD-10 | phase | Backend | Video Status Lifecycle & Processing-Failure Handling | pending | — | — |
-| phase-03-videos/TD-11 | phase | Backend | Upload Size & Type Enforcement | pending | — | — |
+| phase-03-videos/TD-01 | phase | Backend | Bucket & Object Key Organization | decided | A (single private bucket, `videos/{videoId}/…`) | — |
+| phase-03-videos/TD-02 | phase | Backend | S3 Client Library (API + Worker) | decided | A (AWS SDK v3) | @aws-sdk/client-s3, @aws-sdk/s3-request-presigner |
+| phase-03-videos/TD-03 | phase | Backend | Upload Strategy for Files up to 10GB | decided | A (S3 multipart upload with presigned part URLs, client → storage) | — |
+|     └─ Last revision: 2026-10-26 — Pre-registration payload clarified (AMB-2): `POST /videos` requires `title`… | | | | | | |
+| phase-03-videos/TD-04 | phase | Backend | Background Job Queue Technology | decided | A (BullMQ + Redis) | @nestjs/bullmq, bullmq |
+| phase-03-videos/TD-05 | phase | Backend | Video Worker Topology | decided | A (separate worker process, same codebase, own Compose service) | — |
+| phase-03-videos/TD-06 | phase | Backend | FFmpeg / ffprobe Integration | decided | A (system FFmpeg + typed `spawn` wrapper) | — |
+|     └─ Last revision: 2026-10-26 — Persisted metadata clarified (AMB-3): typed columns for duration, width, height… | | | | | | |
+| phase-03-videos/TD-07 | phase | Backend | Processing Output & Streaming Format | decided | A (original file, web-playable formats, progressive HTTP Range streaming) | — |
+| phase-03-videos/TD-08 | phase | Backend | Streaming & Download Delivery Path | decided | A (private bucket + presigned GET; storage serves Range/206) | — |
+|     └─ Last revision: 2026-10-26 — Phase 03 access rule clarified (AMB-1): stream and download URL issuance is… | | | | | | |
+| phase-03-videos/TD-09 | phase | Backend | Unique Short Video Identifier (public URL ID) | decided | A (11-char base64url from `crypto.randomBytes(8)` + unique constraint + retry) | — |
+| phase-03-videos/TD-10 | phase | Backend | Video Status Lifecycle & Processing-Failure Handling | decided | A (`draft → processing → ready \| failed`; retries for transient errors, fail-fast for invalid media) | — |
+|     └─ Last revision: 2026-10-26 — Meaning of "rascunho" clarified (AMB-4): `draft` is a processing-pipeline state… | | | | | | |
+| phase-03-videos/TD-11 | phase | Backend | Upload Size & Type Enforcement | decided | A (declared size/MIME at create + actual size at complete + media verified by worker) | — |
 | phase-03-videos/TD-12 | phase | Backend | MinIO Container Image Source | decided | A (`pgsty/silo`, pinned release tag) | — |
+|     └─ Last revision: 2026-10-26 — Storage test strategy clarified (IC-1): integration and e2e tests that touch… | | | | | | |
 
 _Source files:_
 
@@ -83,15 +88,85 @@ _Source files:_
 
 ## Decisions Detail
 
+### phase-03-videos/TD-01
+
+**Recommendation:** the minimum layout that serves both asset types, derives keys from the immutable PK, and needs a single bucket bootstrap in Compose.
+**Libraries:** —
+
+### phase-03-videos/TD-02
+
+**Recommendation:** the only option that presigns individual multipart parts out of the box and keeps the "MinIO in dev, S3 in prod" switch purely configurational.
+**Libraries:** @aws-sdk/client-s3, @aws-sdk/s3-request-presigner
+
+### phase-03-videos/TD-03
+
+**Recommendation:** the only option where a 10GB upload puts no load on the API, which is the phase's central non-functional requirement; the public/internal endpoint split and CORS are one-time configuration.
+**Libraries:** —
+
+**Revisions:**
+- 2026-10-26 — Pre-registration payload clarified (AMB-2): `POST /videos` requires `title` plus original file name, declared size and MIME type; all are persisted on the draft row. Title stays editable in Phase 04. Rationale: user chose title-required-at-create over deriving it from the file name.
+
+### phase-03-videos/TD-04
+
+**Recommendation:** the only option with an official Nest 11 module and job-level retry/backoff/concurrency semantics out of the box; the cost is one Redis container, which the C4 diagram already budgets as a separate "Message Queue" container.
+**Libraries:** @nestjs/bullmq, bullmq
+
+### phase-03-videos/TD-05
+
+**Recommendation:** honors the C4 container boundary and keeps FFmpeg off the API while sharing persistence, config and storage code with full DI.
+**Libraries:** —
+
+### phase-03-videos/TD-06
+
+**Recommendation:** avoids a deprecated dependency and binary-provenance issues; the worker image (TD-05 A) is the natural place to install FFmpeg.
+**Libraries:** —
+
+**Revisions:**
+- 2026-10-26 — Persisted metadata clarified (AMB-3): typed columns for duration, width, height, video codec, audio codec, container format, bitrate and size (bytes), extracted from ffprobe. Rationale: queryable, testable Data Model over a free-form JSON column.
+
+### phase-03-videos/TD-07
+
+**Recommendation:** fulfils "metadata + thumbnail + streaming" without transcoding cost or extra storage; Option B remains an additive worker step if broader format support becomes a requirement.
+**Libraries:** —
+
+### phase-03-videos/TD-08
+
+**Recommendation:** keeps playback and download off the API while preserving a single authorization point, and reuses the presigning infrastructure of TD-03; Range/206 is delegated to the storage that implements it natively.
+**Libraries:** —
+
+**Revisions:**
+- 2026-10-26 — Phase 03 access rule clarified (AMB-1): stream and download URL issuance is authenticated and restricted to the owner channel, for `ready` videos only. Phase 04 (visibility) and Phase 05 (anonymous access) extend this rule. Rationale: owner-only until visibility rules exist.
+
+### phase-03-videos/TD-09
+
+**Recommendation:** short, unique and unguessable with no dependency and no Node-version friction; the constraint provides the guarantee, the randomness keeps links private.
+**Libraries:** —
+
+### phase-03-videos/TD-10
+
+**Recommendation:** implements exactly the required cycle, distinguishes retriable from non-retriable failures with the queue's own primitives (TD-04 A), and keeps the job idempotent under at-least-once delivery.
+**Libraries:** —
+
+**Revisions:**
+- 2026-10-26 — Meaning of "rascunho" clarified (AMB-4): `draft` is a processing-pipeline state (pre-registered, upload not yet completed). Phase 04 adds a separate publication/visibility field without migrating `status`. Rationale: matches the required cycle rascunho → processando → pronto/erro and keeps Phase 04 additive.
+
+### phase-03-videos/TD-11
+
+**Recommendation:** the only option where the 10GB limit is actually enforced, at negligible cost, without routing bytes through the API.
+**Libraries:** —
+
 ### phase-03-videos/TD-12
 
-**Recommendation:** The only option that preserves the `minio/minio` provisioning experience (same env vars, command, ports, console, bundled `mc`) with a maintained, pullable, license-free image, so `docker compose up` works from a fresh clone. Cautions that apply to this phase's deliverable:
+**Recommendation:** the only option that preserves the `minio/minio` provisioning experience (same env vars, command, ports, console, bundled `mc`) with a maintained, pullable, license-free image, so `docker compose up` works from a fresh clone. Cautions that apply to this phase's deliverable:
 - **Pin an exact release tag** (e.g. `RELEASE.2026-10-18T00-00-00Z`, verified on Docker Hub), never `latest` — the fork recommends pinning, and it keeps the environment reproducible for evaluation.
 - **Use the standard image, not `-distroless`** — only the standard variant ships `curl` (healthcheck) and `mc` (bucket bootstrap); the distroless entrypoint is the `silo` binary and lacks both.
 - **Multipart part order is enforced** — `CompleteMultipartUpload` with duplicate or non-ascending part numbers fails with `InvalidPartOrder` (checksum mismatches → `BadDigest`). The complete endpoint (TD-03) must sort and de-duplicate parts; this is also AWS S3's contract, so the code stays production-correct.
 - **Missing bucket is an error, not an empty result** (`ListObjects` → `NoSuchBucket`) — the bucket bootstrap must finish before the API/worker start (Compose `depends_on` with a completed one-shot service), otherwise the first storage call fails.
 - **Third-party maintenance** — acceptable for the local/dev scope of this deliverable; production targets AWS S3 (or AIStor) through configuration only (TD-02). Option B stays documented as the official alternative for whoever accepts the license step.
 **Libraries:** —
+
+**Revisions:**
+- 2026-10-26 — Storage test strategy clarified (IC-1): integration and e2e tests that touch storage run against the real MinIO (`pgsty/silo`) service in Compose, overriding the testing guide's local-filesystem adapter for this phase; the test environment points the public (presign) endpoint at the internal endpoint so tests can use presigned URLs from inside the container. Rationale: S3-specific paths (presigned multipart, presigned GET, Range) cannot be exercised by a local-filesystem adapter.
 
 ## Inherited Decisions Detail
 
