@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 2/12 completed
+**SIs:** 3/12 completed
 
 ### SI-03.1 — Infra: Storage and Queue Services, Dependencies, and Configuration Namespaces
 - **Status:** completed
@@ -23,9 +23,14 @@
   - Presigned `UploadPart` PUTs worked against `pgsty/silo` with `requestChecksumCalculation: 'WHEN_REQUIRED'`, as the library-refs caution anticipated.
 
 ### SI-03.3 — Video Entity, CreateVideos Migration, and Public ID Generator
-- **Status:** pending
-- **Tests:** pending
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 12 passing in the SI's files (6 entity integration, 2 `generatePublicId` unit, 4 migrations integration); regression 168 unit/integration + 52 e2e passing; `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors)
+- **Observations:**
+  - Migration generated with `npm run migration:generate` against the dev DB *before* any test created the `videos` table, so the diff is exact: `1793065595069-CreateVideos.ts` (enum, table, unique `public_id` index, `channel_id` index, FK; `down` in reverse order). Verified via the CLI: `migration:revert` removes the table and `videos_status_enum`, `migration:run` restores them.
+  - `migrations.integration-spec.ts` now covers 3 migrations / 5 tables, enum + unique index + FK existence, and reverts `CreateVideos` and `CreateAuthTokens` in separate tests. It drops `videos_status_enum` alongside `verification_tokens_type_enum` (as anticipated in SI-03.1 observations).
+  - Flaky deadlock fixed: the spec's `beforeAll` ran the `DROP TABLE ... CASCADE` statements in parallel (`Promise.all`) on different pool connections; with the new `videos -> channels` FK this deadlocked intermittently (1 of ~4 full runs), and the failed `afterAll` cascaded into ~30 failures in other suites. Drops are now sequential; 12 consecutive runs of the affected suites and 2 full runs passed afterwards.
+  - `cleanAllTables` deletes from `videos` first (FK order).
+  - Pre-existing lint error `no-unsafe-function-type` in `src/test/create-test-data-source.ts` left untouched (baseline debt).
 
 ### SI-03.4 — Processing Queue Registration, Producer, and VideosModule
 - **Status:** pending
