@@ -128,4 +128,105 @@ describe('exportSpec (integration)', () => {
       }
     }
   });
+
+  describe('videos endpoints', () => {
+    type Operation = {
+      tags?: string[];
+      summary?: string;
+      security?: Array<Record<string, unknown>>;
+      responses: Record<
+        string,
+        { content?: Record<string, { schema?: { $ref?: string } }> }
+      >;
+    };
+    const ERROR_REF = '#/components/schemas/ApiErrorEnvelope';
+
+    // [method, path, success status, error statuses it must declare]
+    const VIDEO_OPERATIONS: [string, string, string, string[]][] = [
+      ['post', '/videos', '201', ['400', '401']],
+      [
+        'post',
+        '/videos/{publicId}/upload/parts',
+        '200',
+        ['400', '401', '404', '409'],
+      ],
+      ['get', '/videos/{publicId}/upload/parts', '200', ['401', '404', '409']],
+      [
+        'post',
+        '/videos/{publicId}/upload/complete',
+        '202',
+        ['400', '401', '404', '409', '422'],
+      ],
+      ['delete', '/videos/{publicId}/upload', '204', ['401', '404', '409']],
+      ['get', '/videos/{publicId}', '200', ['401', '404']],
+      ['get', '/videos/{publicId}/stream', '302', ['401', '404', '409']],
+      ['get', '/videos/{publicId}/download', '302', ['401', '404', '409']],
+    ];
+
+    const operationOf = (method: string, path: string) =>
+      (document.paths as Record<string, Record<string, Operation>>)[path]?.[
+        method
+      ];
+
+    it.each(VIDEO_OPERATIONS)(
+      '%s %s is tagged videos, requires the access token and documents its responses',
+      (method, path, success, errors) => {
+        const operation = operationOf(method, path);
+
+        expect(operation).toBeDefined();
+        expect(operation.tags).toEqual(['videos']);
+        expect(operation.summary).toBeTruthy();
+        expect(operation.security?.some((req) => 'access-token' in req)).toBe(
+          true,
+        );
+        expect(operation.responses[success]).toBeDefined();
+        for (const status of errors) {
+          expect(
+            operation.responses[status]?.content?.['application/json']?.schema
+              ?.$ref,
+          ).toBe(ERROR_REF);
+        }
+      },
+    );
+
+    it('describes the request bodies of the video endpoints', () => {
+      const schemas = (
+        document.components as {
+          schemas: Record<
+            string,
+            { properties: Record<string, unknown>; required?: string[] }
+          >;
+        }
+      ).schemas;
+
+      expect(Object.keys(schemas['CreateVideoDto'].properties).sort()).toEqual([
+        'file_name',
+        'file_size',
+        'mime_type',
+        'title',
+      ]);
+      expect(Object.keys(schemas['SignUploadPartsDto'].properties)).toEqual([
+        'part_numbers',
+      ]);
+      expect(Object.keys(schemas['CompleteUploadDto'].properties)).toEqual([
+        'parts',
+      ]);
+      expect(
+        Object.keys(schemas['CompletedPartDto'].properties).sort(),
+      ).toEqual(['etag', 'part_number']);
+    });
+
+    it('describes the status/metadata response of GET /videos/{publicId}', () => {
+      const schemas = (
+        document.components as {
+          schemas: Record<string, { properties: Record<string, unknown> }>;
+        }
+      ).schemas;
+
+      const properties = schemas['VideoResponseDto'].properties;
+      expect(properties).toHaveProperty('status');
+      expect(properties).toHaveProperty('duration_seconds');
+      expect(properties).toHaveProperty('thumbnail_url');
+    });
+  });
 });

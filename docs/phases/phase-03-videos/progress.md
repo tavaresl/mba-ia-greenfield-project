@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 11/12 completed
+**SIs:** 12/12 completed
 
 ### SI-03.1 — Infra: Storage and Queue Services, Dependencies, and Configuration Namespaces
 - **Status:** completed
@@ -118,7 +118,12 @@
   - The unit spec's second describe now mocks `presignGetObject`; the integration spec deletes the seeded `videos/{id}/original.mp4` objects in `afterEach` in addition to the global cleanup.
 
 ### SI-03.12 — OpenAPI Artifact and AI Documentation for Videos
-- **Status:** pending
-- **Tests:** pending
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 10 new cases in `openapi-export.integration-spec.ts` (19 total passing: 8 operations tagged `videos` with `access-token` security, success status and the error statuses referencing `ApiErrorEnvelope`; request/response schemas); full unit/integration regression in `video-worker`: 265 passing, 36 suites (2 runs); e2e in `nestjs-api`: 75 passing, 7 suites (2 runs); `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors)
+- **Observations:**
+  - **Bug fixed before it shipped:** `VideosController` used `@ApiBearerAuth()` (default scheme name `bearer`), but the document only declares `access-token`; the videos operations would have pointed at a non-existent security scheme. Now `@ApiBearerAuth('access-token')`, and the export spec asserts it for all 8 operations.
+  - **Request schemas needed explicit `@ApiProperty`:** `npm run openapi:export` runs through `ts-node`, where the Swagger CLI plugin does not run, so DTOs without decorators export as `properties: {}` (this is how the existing auth DTOs appear in the committed `openapi.json`; pre-existing, matches the TD-01 revision). `CreateVideoDto`, `SignUploadPartsDto`, `CompleteUploadDto` and `CompletedPartDto` now carry explicit `@ApiProperty`, and the spec checks their properties. The auth DTOs were left untouched (follow-up).
+  - `openapi.json` diff is additive only (+890 lines, 0 removals; the 9 `/auth` paths unchanged). With `SWAGGER_ENABLED=true`, `GET /api/docs` answers 200 and `/api/docs-json` serves the same 8 `/videos` operations under the `videos` tag.
+  - Documentation: `nestjs-project/CLAUDE.md` gained readiness checks for Redis/MinIO, the new services, where each test suite runs (unit/integration in `video-worker`, e2e in `nestjs-api`, always with `--forceExit`), and a "Videos (Phase 03)" section (modules, 8 endpoints, flow, configuration incl. why `S3_PUBLIC_ENDPOINT` is the only host-facing value, worker/FFmpeg, test-isolation caveats, rate-limit exemption, OpenAPI). A script checked that every path, Compose service, env key, npm script, endpoint and code identifier it mentions exists in the repository (nothing missing).
+  - Root `CLAUDE.md`: Message Queue now names BullMQ on Redis, Object Storage names MinIO via `pgsty/silo` over the S3 API, Video Worker describes the separate container. Also fixed an older false statement there (`next-frontend/` "not yet initialized"), since the acceptance criteria fail a CLAUDE.md that contradicts the code.
 

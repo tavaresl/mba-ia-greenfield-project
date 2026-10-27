@@ -36,7 +36,7 @@ import { VideosService } from './videos.service';
 // endpoints are polled/called in bursts and are exempt from it.
 @SkipThrottle()
 @ApiTags('videos')
-@ApiBearerAuth()
+@ApiBearerAuth('access-token')
 @Controller('videos')
 export class VideosController {
   constructor(private readonly videosService: VideosService) {}
