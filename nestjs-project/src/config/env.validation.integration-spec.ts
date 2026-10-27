@@ -82,6 +82,7 @@ describe('envValidationSchema — storage, queue and videos keys', () => {
       QUEUE_PREFIX: 'bull',
       VIDEO_MAX_UPLOAD_BYTES: 10737418240,
       VIDEO_UPLOAD_PART_SIZE_BYTES: 104857600,
+      VIDEO_MEDIA_TIMEOUT_SECONDS: 300,
     });
   });
 });

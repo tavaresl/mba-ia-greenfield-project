@@ -41,5 +41,6 @@ export const envValidationSchema = Joi.object({
     .min(5242880)
     .max(5368709120)
     .default(104857600),
+  VIDEO_MEDIA_TIMEOUT_SECONDS: Joi.number().integer().min(1).default(300),
   SWAGGER_ENABLED: Joi.string().valid('true', 'false').default('false'),
 });

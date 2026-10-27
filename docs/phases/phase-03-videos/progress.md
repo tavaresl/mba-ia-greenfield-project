@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 8/12 completed
+**SIs:** 9/12 completed
 
 ### SI-03.1 — Infra: Storage and Queue Services, Dependencies, and Configuration Namespaces
 - **Status:** completed
@@ -84,9 +84,16 @@
   - `start:worker` (`node dist/worker`) assumes `nest build` output in `dist/`; `start:worker:dev` is the one used by Compose.
 
 ### SI-03.9 — Media Module: Typed ffprobe/ffmpeg Wrapper and Accepted-Format Policy
-- **Status:** pending
-- **Tests:** pending
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 21 passing (9 `FfmpegService` integration against the real ffmpeg/ffprobe binaries, 12 `isSupportedMedia` unit cases); full unit/integration regression run inside `video-worker`: 225 passing, 34 suites (2 consecutive runs); e2e in `nestjs-api`: 70 passing (2 runs); `tsc --noEmit` exit 0; lint count unchanged from baseline (150 errors)
+- **Observations:**
+  - **Test environment change:** `ffmpeg.service.integration-spec.ts` needs the ffmpeg binaries, so it fails with `spawn ffmpeg ENOENT` in the `nestjs-api` image (confirmed). From this SI on, the unit/integration suite must run in `video-worker` (`docker compose exec video-worker npm test -- --runInBand --forceExit`); the e2e suite keeps running in `nestjs-api`. SI-03.12 must document this in `nestjs-project/CLAUDE.md`.
+  - Added `VIDEO_MEDIA_TIMEOUT_SECONDS` (Joi: integer >= 1, default 300; `videos.config.ts` exposes `mediaTimeoutMs`; `.env.example` updated) to make the wrapper timeout configurable as the plan asks; each call can also override it with `{ timeoutMs }`, which the spec uses.
+  - Timeout implementation: `spawn(..., { signal: AbortSignal.timeout(ms), killSignal: 'SIGKILL' })`; the spec triggers it against a local TCP server that accepts and never answers (also exercising the HTTP input path) and asserts the run is aborted well under 5 s.
+  - Error contract for SI-03.10: `MediaProbeError` = ffprobe exited non-zero, returned unparsable output, or the input has no video stream/duration (maps to `UNSUPPORTED_MEDIA`); `MediaProcessingError` = timeout, binary missing, or ffmpeg failure while extracting a frame (transient; maps to retry/`PROCESSING_FAILED`). `MediaProbe` fields are non-null except `audioCodec` and `bitrate`.
+  - `isSupportedMedia` requires the video codec to match the declared MIME type (`h264` for MP4; `vp8`/`vp9`/`av1` for WebM) and, when an audio stream exists, an accepted audio codec (`aac`; `vorbis`/`opus`). Audio-only and unknown MIME types are rejected.
+  - Fixtures (`src/test/media-fixtures.ts`) use `libx264`, `libvpx-vp9` (realtime/cpu-used 8 to stay fast), `libopus` and `mpeg4` from the Debian 12 ffmpeg 5.1.9 package; generation takes a few seconds per suite. Added a silent-MP4 fixture beyond the three in the plan to cover the optional-audio rule.
+  - Not exercised here: probing/extracting through a real presigned HTTP URL with a moov-at-end MP4 (needs HTTP Range); that path is covered when the processor runs against MinIO in SI-03.10.
 
 ### SI-03.10 — Video Processor (Metadata, Thumbnail, Ready/Failed Transitions)
 - **Status:** pending
